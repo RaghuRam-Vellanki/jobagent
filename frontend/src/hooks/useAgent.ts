@@ -7,7 +7,10 @@ export function useAgentWebSocket() {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
+    let active = true  // prevents double-connect on HMR / StrictMode
+
     function connect() {
+      if (!active) return
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(`${protocol}://${window.location.host}/api/agent/ws`)
       wsRef.current = ws
@@ -33,7 +36,7 @@ export function useAgentWebSocket() {
 
       ws.onclose = () => {
         setConnected(false)
-        reconnectTimer.current = setTimeout(connect, 3000)
+        if (active) reconnectTimer.current = setTimeout(connect, 3000)
       }
 
       ws.onerror = () => {
@@ -44,8 +47,10 @@ export function useAgentWebSocket() {
     connect()
 
     return () => {
+      active = false
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current)
       wsRef.current?.close()
+      wsRef.current = null
     }
   }, [setAgentState, appendLog, setConnected])
 }

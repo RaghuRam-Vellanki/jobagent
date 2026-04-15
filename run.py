@@ -73,9 +73,10 @@ def install_python_deps():
     step(2, "Python dependencies")
     req = os.path.join(ROOT, "backend", "requirements.txt")
     subprocess.check_call([pip_bin(), "install", "-q", "-r", req])
-    # Playwright browsers
-    subprocess.call([python_bin(), "-m", "playwright", "install", "chromium"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Playwright browsers (show progress — first install is ~200 MB download)
+    pw_result = subprocess.call([python_bin(), "-m", "playwright", "install", "chromium"])
+    if pw_result != 0:
+        err("Playwright install failed — run manually: python -m playwright install chromium")
     ok("backend deps installed")
 
 def install_node_deps():
