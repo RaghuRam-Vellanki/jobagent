@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""
+JobAgent v2 — Universal launcher (works on Windows cmd, PowerShell, Git Bash, Mac, Linux)
+Usage: python run.py
+"""
+import subprocess, sys, os, time, signal, socket, shutil
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+VENV = os.path.join(ROOT, ".venv")
+FRONTEND = os.path.join(ROOT, "frontend")
+
+# ── Colours ────────────────────────────────────────────────────────────
+def green(s):  return f"\033[32m{s}\033[0m"
+def yellow(s): return f"\033[33m{s}\033[0m"
+def red(s):    return f"\033[31m{s}\033[0m"
+def cyan(s):   return f"\033[36m{s}\033[0m"
+
+def step(n, msg): print(f"  [{n}/5] {yellow(msg)}")
+def ok(msg):      print(f"        {green('✓')} {msg}")
+def err(msg):     print(f"        {red('✗')} {msg}")
+
+# ── Helpers ────────────────────────────────────────────────────────────
+
+def is_port_free(port):
+    with socket.socket() as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+def kill_port(port):
+    """Kill whatever is listening on `port` (Windows + Unix)."""
+    if sys.platform == "win32":
+        try:
+            out = subprocess.check_output(
+                f'netstat -ano | findstr ":{port} "', shell=True
+            ).decode()
+            for line in out.splitlines():
+                parts = line.split()
+                if parts and parts[-1].isdigit():
+                    subprocess.call(f"taskkill /F /PID {parts[-1]}", shell=True,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    else:
+        subprocess.call(f"fuser -k {port}/tcp", shell=True,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def wait_for_port(port, timeout=20):
+    for _ in range(timeout * 2):
+        if not is_port_free(port):
+            return True
+        time.sleep(0.5)
+    return False
+
+def python_bin():
+    """Python executable inside venv."""
+    if sys.platform == "win32":
+        return os.path.join(VENV, "Scripts", "python.exe")
+    return os.path.join(VENV, "bin", "python")
+
+def pip_bin():
+    if sys.platform == "win32":
+        return os.path.join(VENV, "Scripts", "pip.exe")
+    return os.path.join(VENV, "bin", "pip")
+
+# ── Steps ──────────────────────────────────────────────────────────────
+
+def ensure_venv():
+    step(1, "Python virtual environment")
+    if not os.path.exists(python_bin()):
+        subprocess.check_call([sys.executable, "-m", "venv", VENV])
+    ok(f"venv at {VENV}")
+
+def install_python_deps():
+    step(2, "Python dependencies")
+    req = os.path.join(ROOT, "backend", "requirements.txt")
+    subprocess.check_call([pip_bin(), "install", "-q", "-r", req])
+    # Playwright browsers
+    subprocess.call([python_bin(), "-m", "playwright", "install", "chromium"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ok("backend deps installed")
+
+def install_node_deps():
+    step(3, "Node dependencies")
+    if not os.path.exists(os.path.join(FRONTEND, "node_modules", "vite")):
+        npm = shutil.which("npm")
+        if not npm:
+            err("npm not found — install Node.js from https://nodejs.org")
+            sys.exit(1)
+        subprocess.check_call([npm, "install", "--silent"], cwd=FRONTEND)
+    ok("node deps installed")
+
+def copy_env():
+    step(4, ".env file")
+    env_path = os.path.join(ROOT, ".env")
+    example  = os.path.join(ROOT, ".env.example")
+    if not os.path.exists(env_path):
+        shutil.copy(example, env_path)
+        ok("created .env from .env.example")
+    else:
+        ok(".env exists")
+
+def launch():
+    step(5, "Starting servers")
+
+    # Clear ports
+    for port in (8000, 5173):
+        if not is_port_free(port):
+            print(f"        Clearing port {port}...")
+            kill_port(port)
+            time.sleep(1)
+
+    # Backend
+    backend_env = {**os.environ, "PYTHONPATH": os.path.join(ROOT, "backend")}
+    backend = subprocess.Popen(
+        [python_bin(), "-m", "uvicorn", "backend.main:app",
+         "--host", "127.0.0.1", "--port", "8000", "--reload", "--log-level", "info"],
+        cwd=ROOT,
+        env=backend_env,
+    )
+
+    print("        Waiting for backend...", end="", flush=True)
+    if wait_for_port(8000, timeout=20):
+        print(f" {green('ready')}")
+    else:
+        print(f" {red('timeout — check terminal for errors')}")
+        backend.terminate()
+        sys.exit(1)
+
+    # Frontend
+    npm = shutil.which("npm") or "npm"
+    frontend = subprocess.Popen([npm, "run", "dev"], cwd=FRONTEND)
+
+    print("        Waiting for frontend...", end="", flush=True)
+    if wait_for_port(5173, timeout=20):
+        print(f" {green('ready')}")
+    else:
+        print(f" {red('timeout — check terminal for errors')}")
+
+    print()
+    print(cyan("  ============================================"))
+    print(cyan("     JobAgent v2 is running!"))
+    print(cyan("  ============================================"))
+    print(f"  Dashboard  -->  {green('http://localhost:5173')}")
+    print(f"  API docs   -->  {green('http://localhost:8000/docs')}")
+    print()
+    print("  Press  Ctrl+C  to stop both servers.")
+    print()
+
+    # Open browser
+    try:
+        import webbrowser
+        webbrowser.open("http://localhost:5173")
+    except Exception:
+        pass
+
+    # Wait and forward Ctrl+C
+    def shutdown(sig, frame):
+        print("\n  Stopping servers...")
+        backend.terminate()
+        frontend.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    backend.wait()
+
+# ── Main ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    print()
+    print(cyan("  =========================================="))
+    print(cyan("     JobAgent v2  --  LazyApply"))
+    print(cyan("  =========================================="))
+    print()
+    try:
+        ensure_venv()
+        install_python_deps()
+        install_node_deps()
+        copy_env()
+        launch()
+    except KeyboardInterrupt:
+        print("\n  Aborted.")
+    except subprocess.CalledProcessError as e:
+        err(f"Command failed: {e}")
+        sys.exit(1)
