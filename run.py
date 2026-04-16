@@ -163,7 +163,27 @@ def launch():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    backend.wait()
+    # Watch both processes — restart backend if it crashes
+    while True:
+        time.sleep(2)
+        if backend.poll() is not None:
+            print(f"\n  {red('Backend stopped (exit=%d) — restarting...' % backend.returncode)}")
+            time.sleep(1)
+            backend = subprocess.Popen(
+                [python_bin(), os.path.join(ROOT, "backend", "serve.py")],
+                cwd=ROOT,
+                env=backend_env,
+            )
+            if wait_for_port(8000, timeout=15):
+                print(f"  {green('Backend restarted.')}")
+            else:
+                print(f"  {red('Backend failed to restart — check for errors above.')}")
+        if frontend.poll() is not None:
+            print(f"\n  {yellow('Frontend stopped — restarting...')}")
+            npm = shutil.which("npm") or "npm"
+            frontend = subprocess.Popen([npm, "run", "dev"], cwd=FRONTEND)
+            if wait_for_port(5173, timeout=15):
+                print(f"  {green('Frontend restarted.')}")
 
 # ── Main ───────────────────────────────────────────────────────────────
 

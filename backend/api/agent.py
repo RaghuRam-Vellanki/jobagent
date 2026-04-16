@@ -159,10 +159,17 @@ def _get_profile_dict(db: Session) -> dict:
 
 def _get_credentials(db: Session, platform: str) -> dict:
     c = db.query(Credential).filter_by(platform=platform).first()
+    email = c.email if c else ""
+    password = c.password if c else ""
+    # Use auto-login when credentials are stored; fall back to manual for LinkedIn
+    if platform == "linkedin":
+        login_mode = "auto" if (email and password) else "manual"
+    else:
+        login_mode = "auto"
     return {
-        "email": c.email if c else "",
-        "password": c.password if c else "",
-        "login_mode": "manual" if platform == "linkedin" else "auto",
+        "email": email,
+        "password": password,
+        "login_mode": login_mode,
     }
 
 
