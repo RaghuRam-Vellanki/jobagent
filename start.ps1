@@ -57,7 +57,7 @@ $frontendScript = {
     npm run dev
 }
 
-Start-Process pwsh -ArgumentList "-NoExit", "-Command", "Set-Location '$Root'; & '.venv\Scripts\Activate.ps1'; python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload" -WindowStyle Normal
+Start-Process pwsh -ArgumentList "-NoExit", "-Command", "Set-Location '$Root'; & '.venv\Scripts\Activate.ps1'; python backend\serve.py" -WindowStyle Normal
 Start-Sleep 3
 Start-Process pwsh -ArgumentList "-NoExit", "-Command", "Set-Location '$Root\frontend'; npm run dev" -WindowStyle Normal
 Start-Sleep 4

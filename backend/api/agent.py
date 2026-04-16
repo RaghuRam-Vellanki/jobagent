@@ -6,6 +6,8 @@ import asyncio
 import json
 import logging
 import random
+import sys
+import threading
 from datetime import datetime, date
 from typing import Any
 
@@ -42,7 +44,12 @@ state: dict[str, Any] = {
 
 # Connected WebSocket clients
 _ws_clients: list[WebSocket] = []
-_agent_task: asyncio.Task | None = None
+_agent_thread: threading.Thread | None = None
+# The main uvicorn event loop — captured when the first agent request arrives.
+# Agent runs in a background thread and uses run_coroutine_threadsafe to push
+# broadcasts here, since uvicorn uses WindowsSelectorEventLoop which doesn't
+# support subprocess spawning (Playwright needs ProactorEventLoop).
+_main_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _log(msg: str):
@@ -53,12 +60,13 @@ def _log(msg: str):
         state["log"] = state["log"][-500:]
     state["last_update"] = ts
     logger.info(msg)
-    # Broadcast to WebSocket clients — only schedule if loop is running
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_broadcast({"type": "log", "message": line}))
-    except RuntimeError:
-        pass  # no running loop (e.g. during startup), skip broadcast
+    _schedule_broadcast({"type": "log", "message": line})
+
+
+def _schedule_broadcast(data: dict):
+    """Thread-safe: push a broadcast onto the main uvicorn event loop."""
+    if _main_loop and _main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(_broadcast(data), _main_loop)
 
 
 async def _broadcast(data: dict):
@@ -90,11 +98,7 @@ def _inc_stat(db: Session, field: str, n: int = 1):
     setattr(s, field, getattr(s, field, 0) + n)
     db.commit()
     state[f"today_{field}"] = getattr(s, field)
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(_broadcast({"type": "stats", "state": {k: v for k, v in state.items() if k != "log"}}))
-    except RuntimeError:
-        pass
+    _schedule_broadcast({"type": "stats", "state": {k: v for k, v in state.items() if k != "log"}})
 
 
 def _save_job(db: Session, info: dict, status: str, score: float = 0,
@@ -268,7 +272,10 @@ async def _run_discovery(platforms: list[str]):
                     await asyncio.sleep(random.uniform(0.5, 1.5))
 
             except Exception as e:
-                _log(f"💥 {platform.capitalize()} error: {e}")
+                import traceback
+                tb = traceback.format_exc()
+                _log(f"💥 {platform.capitalize()} error: {type(e).__name__}: {e}")
+                _log(f"   {tb.splitlines()[-1]}")
                 logger.exception(e)
             finally:
                 await agent.stop()
@@ -319,7 +326,7 @@ async def _run_apply():
                 continue
 
             state["current_job"] = f"{job.title} @ {job.company}"
-            asyncio.get_running_loop().create_task(_broadcast({"type": "stats", "state": {k: v for k, v in state.items() if k != "log"}}))
+            _schedule_broadcast({"type": "stats", "state": {k: v for k, v in state.items() if k != "log"}})
             _log(f"🚀 Applying [{job.match_score}]: {job.title} @ {job.company}")
 
             result = await agent.apply_to_job({
@@ -355,6 +362,25 @@ async def _run_apply():
         db.close()
 
 
+def _start_agent_thread(phase: str, platforms: list[str]):
+    """Spin up a background thread with its own ProactorEventLoop for Playwright."""
+    def target():
+        # Windows: uvicorn uses SelectorEventLoop which can't spawn subprocesses.
+        # Running agents in a fresh thread lets us create a ProactorEventLoop.
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_run_agent_task(phase, platforms))
+        finally:
+            loop.close()
+
+    t = threading.Thread(target=target, daemon=True, name=f"agent-{phase}")
+    t.start()
+    return t
+
+
 async def _run_agent_task(phase: str, platforms: list[str]):
     state["running"] = True
     state["paused"] = False
@@ -374,10 +400,7 @@ async def _run_agent_task(phase: str, platforms: list[str]):
         state["running"] = False
         state["phase"] = "idle"
         state["current_job"] = ""
-        try:
-            asyncio.get_running_loop().create_task(_broadcast({"type": "stats", "state": {k: v for k, v in state.items() if k != "log"}}))
-        except RuntimeError:
-            pass
+        _schedule_broadcast({"type": "stats", "state": {k: v for k, v in state.items() if k != "log"}})
 
 
 # ── REST endpoints ────────────────────────────────────────────────────
@@ -394,20 +417,22 @@ def get_log(limit: int = 100):
 
 @router.post("/start/discover")
 async def start_discover(payload: dict = {}):
-    global _agent_task
+    global _agent_thread, _main_loop
     if state["running"]:
         return {"error": "Agent already running"}
+    _main_loop = asyncio.get_running_loop()
     platforms = payload.get("platforms", ["linkedin", "naukri", "internshala", "unstop"])
-    _agent_task = asyncio.create_task(_run_agent_task("discover", platforms))
+    _agent_thread = _start_agent_thread("discover", platforms)
     return {"ok": True, "phase": "discover", "platforms": platforms}
 
 
 @router.post("/start/apply")
 async def start_apply():
-    global _agent_task
+    global _agent_thread, _main_loop
     if state["running"]:
         return {"error": "Agent already running"}
-    _agent_task = asyncio.create_task(_run_agent_task("apply", []))
+    _main_loop = asyncio.get_running_loop()
+    _agent_thread = _start_agent_thread("apply", [])
     return {"ok": True, "phase": "apply"}
 
 

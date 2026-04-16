@@ -61,7 +61,7 @@ set "BSCRIPT=%TEMP%\ja_backend.bat"
     echo cd /d "%ROOT%"
     echo call ".venv\Scripts\activate.bat"
     echo echo Backend starting on http://localhost:8000 ...
-    echo python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+    echo python backend\serve.py
     echo pause
 ) > "%BSCRIPT%"
 

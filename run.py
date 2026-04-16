@@ -109,11 +109,11 @@ def launch():
             kill_port(port)
             time.sleep(1)
 
-    # Backend
+    # Backend — use serve.py so ProactorEventLoop is set before uvicorn starts
+    # (Playwright needs ProactorEventLoop to spawn subprocesses on Windows)
     backend_env = {**os.environ, "PYTHONPATH": os.path.join(ROOT, "backend")}
     backend = subprocess.Popen(
-        [python_bin(), "-m", "uvicorn", "backend.main:app",
-         "--host", "127.0.0.1", "--port", "8000", "--reload", "--log-level", "info"],
+        [python_bin(), os.path.join(ROOT, "backend", "serve.py")],
         cwd=ROOT,
         env=backend_env,
     )
