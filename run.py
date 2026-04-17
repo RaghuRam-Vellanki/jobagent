@@ -22,8 +22,16 @@ def err(msg):     print(f"        {red('✗')} {msg}")
 # ── Helpers ────────────────────────────────────────────────────────────
 
 def is_port_free(port):
-    with socket.socket() as s:
-        return s.connect_ex(("127.0.0.1", port)) != 0
+    # Try both IPv4 and IPv6 — Vite binds to ::1 on some Windows setups
+    for host in ("127.0.0.1", "::1"):
+        try:
+            af = socket.AF_INET6 if ":" in host else socket.AF_INET
+            with socket.socket(af) as s:
+                if s.connect_ex((host, port)) == 0:
+                    return False
+        except OSError:
+            pass
+    return True
 
 def kill_port(port):
     """Kill whatever is listening on `port` (Windows + Unix)."""

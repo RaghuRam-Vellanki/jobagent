@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, UploadFile, File
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import Profile, Credential
+from db.models import Profile, Credential, User
 from config import RESUME_DIR
+from auth_utils import get_current_user
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -47,18 +48,18 @@ def _profile_to_dict(p: Profile) -> dict:
 
 
 @router.get("")
-def get_profile(db: Session = Depends(get_db)):
-    p = db.query(Profile).first()
+def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    p = db.query(Profile).filter_by(user_id=current_user.id).first()
     if not p:
         return {}
     return _profile_to_dict(p)
 
 
 @router.put("")
-def update_profile(payload: dict, db: Session = Depends(get_db)):
-    p = db.query(Profile).first()
+def update_profile(payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    p = db.query(Profile).filter_by(user_id=current_user.id).first()
     if not p:
-        p = Profile()
+        p = Profile(user_id=current_user.id)
         db.add(p)
 
     field_map = {
@@ -81,14 +82,18 @@ def update_profile(payload: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/resume")
-async def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_resume(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     os.makedirs(RESUME_DIR, exist_ok=True)
     filename = file.filename or "resume.pdf"
     dest = os.path.join(RESUME_DIR, filename)
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    p = db.query(Profile).first()
+    p = db.query(Profile).filter_by(user_id=current_user.id).first()
     if p:
         p.resume_path = f"resume/{filename}"
         db.commit()
@@ -97,18 +102,18 @@ async def upload_resume(file: UploadFile = File(...), db: Session = Depends(get_
 
 
 @router.get("/credentials/{platform}")
-def get_credentials(platform: str, db: Session = Depends(get_db)):
-    c = db.query(Credential).filter_by(platform=platform).first()
+def get_credentials(platform: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    c = db.query(Credential).filter_by(user_id=current_user.id, platform=platform).first()
     if not c:
         return {"platform": platform, "email": "", "has_password": False}
     return {"platform": platform, "email": c.email, "has_password": bool(c.password)}
 
 
 @router.put("/credentials/{platform}")
-def set_credentials(platform: str, payload: dict, db: Session = Depends(get_db)):
-    c = db.query(Credential).filter_by(platform=platform).first()
+def set_credentials(platform: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    c = db.query(Credential).filter_by(user_id=current_user.id, platform=platform).first()
     if not c:
-        c = Credential(platform=platform)
+        c = Credential(user_id=current_user.id, platform=platform)
         db.add(c)
     if "email" in payload:
         c.email = payload["email"]

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from db.database import init_db
+from api.auth import router as auth_router
 from api.jobs import router as jobs_router
 from api.agent import router as agent_router
 from api.profile import router as profile_router
@@ -42,6 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(jobs_router)
 app.include_router(agent_router)
 app.include_router(profile_router)

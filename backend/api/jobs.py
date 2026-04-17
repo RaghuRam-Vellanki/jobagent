@@ -4,7 +4,8 @@ from typing import Optional
 from datetime import datetime
 
 from db.database import get_db
-from db.models import Job
+from db.models import Job, User
+from auth_utils import get_current_user
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -39,8 +40,9 @@ def list_jobs(
     limit: int = Query(200, le=500),
     offset: int = Query(0),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Job)
+    q = db.query(Job).filter(Job.user_id == current_user.id)
     if status:
         statuses = status.upper().split(",")
         q = q.filter(Job.status.in_(statuses))
@@ -53,8 +55,8 @@ def list_jobs(
 
 
 @router.post("/{job_id}/approve")
-def approve_job(job_id: str, db: Session = Depends(get_db)):
-    j = db.query(Job).filter_by(job_id=job_id).first()
+def approve_job(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    j = db.query(Job).filter_by(user_id=current_user.id, job_id=job_id).first()
     if not j:
         return {"error": "not found"}
     j.status = "APPROVED"
@@ -63,8 +65,8 @@ def approve_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{job_id}/reject")
-def reject_job(job_id: str, db: Session = Depends(get_db)):
-    j = db.query(Job).filter_by(job_id=job_id).first()
+def reject_job(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    j = db.query(Job).filter_by(user_id=current_user.id, job_id=job_id).first()
     if not j:
         return {"error": "not found"}
     j.status = "SKIPPED"
@@ -73,8 +75,8 @@ def reject_job(job_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/{job_id}")
-def update_job(job_id: str, payload: dict, db: Session = Depends(get_db)):
-    j = db.query(Job).filter_by(job_id=job_id).first()
+def update_job(job_id: str, payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    j = db.query(Job).filter_by(user_id=current_user.id, job_id=job_id).first()
     if not j:
         return {"error": "not found"}
     allowed = {"notes", "response_status", "follow_up_date", "status"}
@@ -86,8 +88,8 @@ def update_job(job_id: str, payload: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/{job_id}")
-def delete_job(job_id: str, db: Session = Depends(get_db)):
-    j = db.query(Job).filter_by(job_id=job_id).first()
+def delete_job(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    j = db.query(Job).filter_by(user_id=current_user.id, job_id=job_id).first()
     if not j:
         return {"error": "not found"}
     db.delete(j)

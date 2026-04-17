@@ -1,17 +1,19 @@
 import React from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import { Sidebar } from './components/Sidebar'
 import { useAgentWebSocket } from './hooks/useAgent'
+import { useAuthStore } from './store/authStore'
 import Dashboard from './pages/Dashboard'
 import Discovery from './pages/Discovery'
 import Queue from './pages/Queue'
 import Applied from './pages/Applied'
 import ATS from './pages/ATS'
 import Settings from './pages/Settings'
+import Login from './pages/Login'
+import Register from './pages/Register'
 
-export default function App() {
+function ProtectedApp() {
   useAgentWebSocket()
-
   return (
     <div className="flex min-h-screen bg-bg">
       <Sidebar />
@@ -23,8 +25,21 @@ export default function App() {
           <Route path="/applied" element={<Applied />} />
           <Route path="/ats" element={<ATS />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
     </div>
+  )
+}
+
+export default function App() {
+  const { token } = useAuthStore()
+
+  return (
+    <Routes>
+      <Route path="/login" element={token ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/register" element={token ? <Navigate to="/" replace /> : <Register />} />
+      <Route path="/*" element={token ? <ProtectedApp /> : <Navigate to="/login" replace />} />
+    </Routes>
   )
 }

@@ -27,3 +27,6 @@ COMPANY_BLACKLIST: list[str] = []
 API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8000"))
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+
+# Auth — override SECRET_KEY in production!
+SECRET_KEY = os.getenv("SECRET_KEY", "7152bfd03c5e9022ea8ea60ff4b41a83c34f84088207ee1b5933acbfe5387117")

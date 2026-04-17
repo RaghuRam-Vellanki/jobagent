@@ -2,6 +2,32 @@ import axios from 'axios'
 
 export const api = axios.create({ baseURL: '/api' })
 
+// Attach JWT token from localStorage on every request
+api.interceptors.request.use((config) => {
+  try {
+    const stored = localStorage.getItem('jobagent-auth')
+    if (stored) {
+      const { state } = JSON.parse(stored)
+      if (state?.token) {
+        config.headers.Authorization = `Bearer ${state.token}`
+      }
+    }
+  } catch (_) {}
+  return config
+})
+
+// Redirect to login on 401
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401 && window.location.pathname !== '/login') {
+      localStorage.removeItem('jobagent-auth')
+      window.location.href = '/login'
+    }
+    return Promise.reject(err)
+  }
+)
+
 // Jobs
 export const getJobs = (status?: string, platform?: string) =>
   api.get('/jobs', { params: { status, platform, limit: 200 } }).then(r => r.data)

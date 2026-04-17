@@ -1,8 +1,9 @@
 import React from 'react'
-import { NavLink } from 'react-router-dom'
-import { LayoutDashboard, Search, Inbox, CheckSquare, BarChart2, Settings, Wifi, WifiOff } from 'lucide-react'
+import { NavLink, useNavigate } from 'react-router-dom'
+import { LayoutDashboard, Search, Inbox, CheckSquare, BarChart2, Settings, Wifi, WifiOff, LogOut } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAgentStore } from '../store/agentStore'
+import { useAuthStore } from '../store/authStore'
 
 const NAV = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -15,6 +16,13 @@ const NAV = [
 
 export function Sidebar() {
   const { connected, running, phase } = useAgentStore()
+  const { email, logout } = useAuthStore()
+  const navigate = useNavigate()
+
+  function handleLogout() {
+    logout()
+    navigate('/login')
+  }
 
   return (
     <nav className="fixed left-0 top-0 h-screen w-56 bg-white border-r border-border flex flex-col z-10">
@@ -54,7 +62,7 @@ export function Sidebar() {
       </div>
 
       {/* Status footer */}
-      <div className="px-4 py-4 border-t border-border">
+      <div className="px-4 py-4 border-t border-border space-y-2">
         <div className="flex items-center gap-2 text-xs">
           {connected ? (
             <Wifi size={12} className="text-success" />
@@ -66,9 +74,20 @@ export function Sidebar() {
           </span>
         </div>
         {running && (
-          <div className="mt-1 flex items-center gap-1.5 text-xs text-warning">
+          <div className="flex items-center gap-1.5 text-xs text-warning">
             <span className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
             {phase}
+          </div>
+        )}
+        {email && (
+          <div className="pt-1">
+            <p className="text-[10px] text-muted truncate">{email}</p>
+            <button
+              onClick={handleLogout}
+              className="mt-1 flex items-center gap-1 text-xs text-muted hover:text-danger transition-colors"
+            >
+              <LogOut size={11} /> Sign out
+            </button>
           </div>
         )}
       </div>

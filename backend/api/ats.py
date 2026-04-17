@@ -4,15 +4,16 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from db.database import get_db
-from db.models import Profile, Job
+from db.models import Profile, Job, User
 from scoring.semantic_scorer import score_ats, DEFAULT_SKILLS
 from config import RESUME_DIR
+from auth_utils import get_current_user
 
 router = APIRouter(prefix="/api/ats", tags=["ats"])
 
 
-def _get_skills(db: Session) -> list[str]:
-    p = db.query(Profile).first()
+def _get_skills(db: Session, user_id: int) -> list[str]:
+    p = db.query(Profile).filter_by(user_id=user_id).first()
     if p and p.skills:
         try:
             return json.loads(p.skills)
@@ -22,7 +23,6 @@ def _get_skills(db: Session) -> list[str]:
 
 
 def _read_resume_text(resume_path: str) -> str:
-    """Extract text from resume PDF using pdfminer."""
     if not resume_path:
         return ""
     if not os.path.isabs(resume_path):
@@ -38,28 +38,26 @@ def _read_resume_text(resume_path: str) -> str:
 
 
 @router.post("/score")
-def score_job_ats(payload: dict, db: Session = Depends(get_db)):
-    """Score a job description against the user's resume + skills."""
+def score_job_ats(payload: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     job_description = payload.get("description", "")
     if not job_description:
         return {"error": "description required"}
-
-    skills = _get_skills(db)
-    p = db.query(Profile).first()
+    skills = _get_skills(db, current_user.id)
+    p = db.query(Profile).filter_by(user_id=current_user.id).first()
     resume_text = _read_resume_text(p.resume_path if p else "")
-
-    result = score_ats(resume_text, job_description, skills)
-    return result
+    return score_ats(resume_text, job_description, skills)
 
 
 @router.post("/score-all")
-def score_all_queued(db: Session = Depends(get_db)):
-    """Batch-score all QUEUED jobs that don't have an ATS score yet."""
-    skills = _get_skills(db)
-    p = db.query(Profile).first()
+def score_all_queued(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    skills = _get_skills(db, current_user.id)
+    p = db.query(Profile).filter_by(user_id=current_user.id).first()
     resume_text = _read_resume_text(p.resume_path if p else "")
-
-    jobs = db.query(Job).filter(Job.status == "QUEUED", Job.ats_score == None).limit(50).all()
+    jobs = db.query(Job).filter(
+        Job.user_id == current_user.id,
+        Job.status == "QUEUED",
+        Job.ats_score == None,
+    ).limit(50).all()
     updated = 0
     for j in jobs:
         result = score_ats(resume_text, j.description or "", skills)
@@ -71,13 +69,16 @@ def score_all_queued(db: Session = Depends(get_db)):
 
 
 @router.get("/gap-report")
-def gap_report(db: Session = Depends(get_db)):
-    """Aggregate missing keywords across all scored jobs this week."""
+def gap_report(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     from collections import Counter
     from datetime import datetime, timedelta
 
     week_ago = datetime.utcnow() - timedelta(days=7)
-    jobs = db.query(Job).filter(Job.discovered_at >= week_ago, Job.ats_gaps != None).all()
+    jobs = db.query(Job).filter(
+        Job.user_id == current_user.id,
+        Job.discovered_at >= week_ago,
+        Job.ats_gaps != None,
+    ).all()
 
     gap_counter: Counter = Counter()
     for j in jobs:
