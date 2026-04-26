@@ -32,8 +32,9 @@ export default function ATS() {
       await uploadResume(file)
       setUploadMsg(`✅ Uploaded: ${file.name}`)
       qc.invalidateQueries({ queryKey: ['profile'] })
-    } catch {
-      setUploadMsg('❌ Upload failed')
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || 'Upload failed'
+      setUploadMsg(`❌ ${detail}`)
     } finally {
       setUploading(false)
     }

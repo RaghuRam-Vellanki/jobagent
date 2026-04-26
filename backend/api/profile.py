@@ -1,13 +1,14 @@
 import os
 import json
 import shutil
-from fastapi import APIRouter, Depends, UploadFile, File
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session
 
 from db.database import get_db
 from db.models import Profile, Credential, User
 from config import RESUME_DIR
 from auth_utils import get_current_user
+from parsing.resume_parser import parse_resume
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
 
@@ -87,18 +88,52 @@ async def upload_resume(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    os.makedirs(RESUME_DIR, exist_ok=True)
-    filename = file.filename or "resume.pdf"
-    dest = os.path.join(RESUME_DIR, filename)
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    user_dir = os.path.join(RESUME_DIR, str(current_user.id))
+    os.makedirs(user_dir, exist_ok=True)
+    filename = os.path.basename(file.filename or "resume.pdf")
+    dest = os.path.join(user_dir, filename)
+    rel_path = f"resume/{current_user.id}/{filename}"
+
+    try:
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+    except PermissionError:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot overwrite {filename} — close the file in any PDF viewer and retry.",
+        )
 
     p = db.query(Profile).filter_by(user_id=current_user.id).first()
-    if p:
-        p.resume_path = f"resume/{filename}"
-        db.commit()
+    if p is None:
+        p = Profile(user_id=current_user.id, resume_path=rel_path)
+        db.add(p)
+    else:
+        p.resume_path = rel_path
 
-    return {"ok": True, "resume_path": f"resume/{filename}"}
+    # Parse the PDF and auto-fill blank profile fields. Never overwrite
+    # values the user has already typed.
+    parsed = parse_resume(dest)
+    autofilled = []
+    string_fields = ("full_name", "email", "phone", "city", "current_title", "portfolio_url")
+    for k in string_fields:
+        if parsed.get(k) and not (getattr(p, k, "") or "").strip():
+            setattr(p, k, parsed[k])
+            autofilled.append(k)
+    if parsed.get("years_of_experience") and not (p.years_of_experience or 0):
+        p.years_of_experience = parsed["years_of_experience"]
+        autofilled.append("years_of_experience")
+    if parsed.get("skills") and not (p.skills or "").strip():
+        p.skills = json.dumps(parsed["skills"])
+        autofilled.append("skills")
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "resume_path": rel_path,
+        "parsed": parsed,
+        "autofilled_fields": autofilled,
+    }
 
 
 @router.get("/credentials/{platform}")

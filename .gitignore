@@ -18,6 +18,8 @@ build/
 # Database & data
 data/*.db
 data/*.sqlite
+data/*.db-shm
+data/*.db-wal
 
 # Resumes (private)
 resume/
@@ -43,3 +45,9 @@ test-results/
 
 # Logs
 *.log
+
+# Claude Code skills (installed locally, not project code)
+.claude/skills/
+
+# Test artifacts
+tests/screenshots/

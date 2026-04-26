@@ -1,8 +1,10 @@
 import React from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Sidebar } from './components/Sidebar'
 import { useAgentWebSocket } from './hooks/useAgent'
 import { useAuthStore } from './store/authStore'
+import { getProfile } from './lib/api'
 import Dashboard from './pages/Dashboard'
 import Discovery from './pages/Discovery'
 import Queue from './pages/Queue'
@@ -11,9 +13,28 @@ import ATS from './pages/ATS'
 import Settings from './pages/Settings'
 import Login from './pages/Login'
 import Register from './pages/Register'
+import Onboarding from './pages/Onboarding'
 
 function ProtectedApp() {
   useAgentWebSocket()
+  const location = useLocation()
+  const { data: profile, isLoading } = useQuery({ queryKey: ['profile'], queryFn: getProfile })
+
+  // First-run gate: no resume → onboarding (except when already there)
+  const needsOnboarding = !isLoading && profile && !profile.resume_path
+  if (needsOnboarding && location.pathname !== '/onboarding') {
+    return <Navigate to="/onboarding" replace />
+  }
+
+  // Onboarding is full-screen, no sidebar
+  if (location.pathname === '/onboarding') {
+    return (
+      <Routes>
+        <Route path="/onboarding" element={<Onboarding />} />
+      </Routes>
+    )
+  }
+
   return (
     <div className="flex min-h-screen bg-bg">
       <Sidebar />
