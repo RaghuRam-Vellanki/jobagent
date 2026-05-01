@@ -315,6 +315,40 @@ export default function Settings() {
                 </>
               )}
             </div>
+
+            <div className="border-t border-border pt-5">
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <div className="text-sm font-semibold text-text">Auto-submit applications</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    Click the final <b>Submit</b> / <b>Apply</b> button automatically after the form is filled.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(form.auto_submit_enabled)}
+                  onClick={() => setField('auto_submit_enabled', !form.auto_submit_enabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                    form.auto_submit_enabled ? 'bg-accent' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
+                      form.auto_submit_enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+              {Boolean(form.auto_submit_enabled) && (
+                <div className="text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded p-3 leading-relaxed">
+                  <b>Heads up:</b> applications will actually be submitted with no human in the loop.
+                  If a field maps incorrectly the wrong info gets sent. Recommend turning OFF until
+                  you've watched 3–5 manual applies and confirmed the universal filler picks the
+                  right answers for your platform mix (LinkedIn / Naukri / Greenhouse / Ashby).
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

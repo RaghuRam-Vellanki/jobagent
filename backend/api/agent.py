@@ -189,6 +189,8 @@ def _get_profile_dict(db: Session, user_id: int) -> dict:
         # V1.1 fields used by email notifications
         "email_notifications_enabled": bool(p.email_notifications_enabled),
         "notification_email": p.notification_email or "",
+        # V1.1 auto-submit toggle (read by UniversalFormFiller and chatbot flows)
+        "auto_submit_enabled": bool(p.auto_submit_enabled),
     }
 
 
@@ -399,6 +401,14 @@ async def _run_apply(user_id: int):
                         result = await agent.apply_to_job({
                             "job_id": job.job_id, "title": job.title, "company": job.company,
                             "url": job.url, "description": job.description,
+                            # E2-S8 bug fix: route on apply_channel from DB so external
+                            # jobs (Apply on company website / Workday / Greenhouse / etc.)
+                            # actually use the universal filler path instead of
+                            # defaulting to Easy Apply heuristics.
+                            "apply_channel": job.apply_channel or "external",
+                            "external_apply_url": job.external_apply_url,
+                            "easy_apply": (job.apply_channel == "easy_apply"),
+                            "location": job.location,
                         })
                     except Exception as e:
                         logger.exception(e)
@@ -446,6 +456,133 @@ async def _run_apply(user_id: int):
         _log(f"🏁 Apply phase done. Applied: {applied_today}", user_id)
     finally:
         db.close()
+
+
+# ── Single-job apply (E2-S8) ──────────────────────────────────────────
+
+async def _run_apply_one(target_job_id: int, user_id: int):
+    """Apply to ONE specific job (regardless of status). Used by per-row
+    Approve clicks so the user gets immediate feedback on a single listing.
+    """
+    db = SessionLocal()
+    st = _get_user_state(user_id)
+    try:
+        profile = _get_profile_dict(db, user_id)
+        job = db.query(Job).filter_by(user_id=user_id, id=target_job_id).first()
+        if not job:
+            _log(f"⚠️ Apply-one: job {target_job_id} not found", user_id)
+            return
+        if job.status not in ("APPROVED", "QUEUED"):
+            _log(f"⚠️ Apply-one: job already {job.status}", user_id)
+            return
+
+        platform = job.platform or "linkedin"
+        AgentClass = _APPLY_AGENT_CLASSES.get(platform)
+        if not AgentClass:
+            _log(f"⚠️ Apply-one: no agent for platform '{platform}'", user_id)
+            return
+
+        st["phase"] = "applying"
+        st["current_job"] = f"{job.title} @ {job.company}"
+        _log(f"🚀 Apply-one: {job.title} @ {job.company} [{platform} / {job.apply_channel}]", user_id)
+
+        credentials = _get_credentials(db, platform, user_id)
+        agent = AgentClass(profile=profile, credentials=credentials)
+        headless = not (platform == "linkedin" or getattr(AgentClass, "requires_visible_browser", False))
+        await agent.start(headless=headless)
+        try:
+            if not await agent.login():
+                _log(f"❌ {platform.capitalize()} login failed", user_id)
+                return
+
+            try:
+                result = await agent.apply_to_job({
+                    "job_id": job.job_id, "title": job.title, "company": job.company,
+                    "url": job.url, "description": job.description,
+                    "apply_channel": job.apply_channel or "external",
+                    "external_apply_url": job.external_apply_url,
+                    "easy_apply": (job.apply_channel == "easy_apply"),
+                    "location": job.location,
+                })
+            except Exception as e:
+                logger.exception(e)
+                _log(f"💥 Apply-one error: {type(e).__name__}: {e}", user_id)
+                result = "failed"
+
+            if result == "applied":
+                job.status = "APPLIED"
+                job.applied_at = datetime.utcnow()
+                db.commit()
+                _inc_stat(db, "applied", user_id)
+                _log(f"✅ Applied: {job.title}", user_id)
+                try:
+                    from notifications import send_apply_email
+                    if send_apply_email(profile, {
+                        "title": job.title, "company": job.company,
+                        "location": job.location, "url": job.url,
+                        "platform": job.platform, "match_score": job.match_score,
+                        "applied_at": job.applied_at.strftime("%Y-%m-%d %H:%M UTC"),
+                    }):
+                        _log(f"✉️  Email sent for {job.title}", user_id)
+                except Exception as e:
+                    logger.debug(f"email notify error: {e}")
+            elif result == "failed":
+                job.status = "FAILED"
+                db.commit()
+                _inc_stat(db, "failed", user_id)
+                _log(f"❌ Failed: {job.title}", user_id)
+            elif result == "skipped":
+                job.status = "SKIPPED"
+                job.skip_reason = "skipped_at_apply"
+                db.commit()
+                _inc_stat(db, "skipped", user_id)
+        finally:
+            await agent.stop()
+
+        st["phase"] = "idle"
+        st["current_job"] = ""
+    finally:
+        db.close()
+
+
+async def _run_one_task(job_id: int, user_id: int):
+    st = _get_user_state(user_id)
+    st["running"] = True
+    st["paused"] = False
+    st["error"] = None
+    try:
+        await _run_apply_one(job_id, user_id)
+    except Exception as e:
+        st["error"] = str(e)
+        _log(f"💥 Agent crashed: {e}", user_id)
+        logger.exception(e)
+    finally:
+        st["running"] = False
+        st["phase"] = "idle"
+        st["current_job"] = ""
+        _schedule_broadcast({"type": "stats", "state": {k: v for k, v in st.items() if k != "log"}}, user_id)
+
+
+def _start_apply_one_thread(job_id: int, user_id: int):
+    if not _browser_semaphore.acquire(blocking=False):
+        return None, "server_busy"
+
+    def target():
+        try:
+            if sys.platform == "win32":
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_run_one_task(job_id, user_id))
+            finally:
+                loop.close()
+        finally:
+            _browser_semaphore.release()
+
+    t = threading.Thread(target=target, daemon=True, name=f"agent-apply-one-u{user_id}-j{job_id}")
+    t.start()
+    return t, None
 
 
 def _start_agent_thread(phase: str, platforms: list[str], user_id: int):
@@ -536,6 +673,22 @@ async def start_apply(current_user: User = Depends(get_current_user)):
         return {"error": err}
     _agent_threads[user_id] = t
     return {"ok": True, "phase": "apply"}
+
+
+@router.post("/start/apply-one/{job_id}")
+async def start_apply_one(job_id: int, current_user: User = Depends(get_current_user)):
+    """E2-S8: apply to a single specific job immediately (universal filler)."""
+    global _main_loop
+    user_id = current_user.id
+    st = _get_user_state(user_id)
+    if st["running"]:
+        return {"error": "Agent already running — try again after current run finishes"}
+    _main_loop = asyncio.get_running_loop()
+    t, err = _start_apply_one_thread(job_id, user_id)
+    if err:
+        return {"error": err}
+    _agent_threads[user_id] = t
+    return {"ok": True, "phase": "apply-one", "job_id": job_id}
 
 
 @router.post("/stop")

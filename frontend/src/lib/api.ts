@@ -57,6 +57,9 @@ export const startDiscover = (platforms: string[]) =>
 export const startApply = () =>
   api.post('/agent/start/apply').then(r => r.data)
 
+export const applyOneJob = (jobNumericId: number) =>
+  api.post(`/agent/start/apply-one/${jobNumericId}`).then(r => r.data)
+
 export const stopAgent = () =>
   api.post('/agent/stop').then(r => r.data)
 

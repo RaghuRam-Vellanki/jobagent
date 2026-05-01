@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getJobs, approveJob, rejectJob, approveAll, startApply } from '../lib/api'
+import { getJobs, approveJob, rejectJob, approveAll, startApply, applyOneJob } from '../lib/api'
 import { Job } from '../lib/types'
 import { ScoreRing } from '../components/ScoreRing'
 import { PlatformBadge } from '../components/PlatformBadge'
@@ -74,11 +74,28 @@ export default function Queue() {
     }
   }
 
-  async function handleApprove(jobId: string) {
+  async function handleApprove(jobId: string, numericId: number) {
     setActionLoading(prev => ({ ...prev, [jobId]: true }))
-    await approveJob(jobId)
-    qc.invalidateQueries({ queryKey: ['jobs'] })
-    setActionLoading(prev => ({ ...prev, [jobId]: false }))
+    try {
+      await approveJob(jobId)
+      qc.invalidateQueries({ queryKey: ['jobs'] })
+
+      // E2-S8: kick off apply for THIS job immediately when agent is idle.
+      // The visible browser opens, follows external redirects if needed, runs
+      // the universal filler, and stops at the review step.
+      if (!running && phase === 'idle') {
+        try {
+          await applyOneJob(numericId)
+          setBulkMsg('Applying now — watch the live log on the Dashboard')
+          setTimeout(() => setBulkMsg(''), 5000)
+        } catch (e) {
+          // approve still succeeded; surface but don't block
+          console.warn('apply-one failed', e)
+        }
+      }
+    } finally {
+      setActionLoading(prev => ({ ...prev, [jobId]: false }))
+    }
   }
 
   async function handleReject(jobId: string) {
@@ -199,7 +216,7 @@ export default function Queue() {
             {/* Actions */}
             <div className="flex gap-2 flex-shrink-0">
               <button
-                onClick={() => handleApprove(job.job_id)}
+                onClick={() => handleApprove(job.job_id, job.id)}
                 disabled={actionLoading[job.job_id]}
                 className="flex items-center gap-1.5 px-3 py-2 bg-success text-white rounded text-sm font-medium hover:bg-green-600 disabled:opacity-50 transition-colors"
                 title="Add to the approved list. Click 'Apply N now' above to actually submit."

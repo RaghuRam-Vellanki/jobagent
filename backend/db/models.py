@@ -107,6 +107,9 @@ class Profile(Base):
     email_notifications_enabled = Column(Boolean, default=False, nullable=False)
     # V1.1: email recipient for notifications (defaults to profile.email if blank)
     notification_email = Column(String, default="", nullable=False)
+    # V1.1: when True, the agent clicks the final Submit/Apply Now button
+    # itself instead of stopping at the review page. Default False (safer).
+    auto_submit_enabled = Column(Boolean, default=False, nullable=False)
 
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

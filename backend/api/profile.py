@@ -61,6 +61,7 @@ def _profile_to_dict(p: Profile) -> dict:
         # V1.1
         "email_notifications_enabled": bool(p.email_notifications_enabled),
         "notification_email": p.notification_email or "",
+        "auto_submit_enabled": bool(p.auto_submit_enabled),
     }
 
 
@@ -89,6 +90,8 @@ def update_profile(payload: dict, db: Session = Depends(get_db), current_user: U
         "persona", "graduation_year", "auto_run_enabled", "auto_run_time",
         # V1.1 email
         "email_notifications_enabled", "notification_email",
+        # V1.1 auto-submit
+        "auto_submit_enabled",
     }
     for key, val in payload.items():
         if key in field_map:

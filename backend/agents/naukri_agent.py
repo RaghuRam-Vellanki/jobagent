@@ -250,8 +250,15 @@ class NaukriAgent(BaseAgent):
         """
         title = job.get("title", "?")
         url = job.get("url", "")
+        apply_channel = job.get("apply_channel") or "easy_apply"
         if not url:
             return "skipped"
+
+        # E4-S9: external Naukri jobs — follow the company-website redirect
+        # and run the universal filler instead of the in-platform chatbot.
+        if apply_channel == "external":
+            return await self._apply_external_naukri(job)
+
         try:
             await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
             try:
@@ -263,6 +270,17 @@ class NaukriAgent(BaseAgent):
                 logger.warning(f"[Naukri] No apply button rendered for: {title}")
                 return "failed"
             await self.human_delay(0.8, 1.5)
+
+            # E4-S9 fallback: if the page reveals an "Apply on company site"
+            # button (Naukri sometimes hides this until the listing renders),
+            # treat that as external regardless of what discovery tagged.
+            company_apply = self.page.locator(
+                "a:has-text('Apply on company'), button:has-text('Apply on company'), "
+                "a:has-text('Apply on Company'), a[href*='company']:has-text('Apply')"
+            )
+            if await company_apply.count() > 0:
+                logger.info(f"[Naukri] Detected company-site button — switching to external path: {title}")
+                return await self._apply_external_via_button(job, company_apply.first)
 
             # If only the login-prompt buttons are visible, we have no session.
             real_apply = await self.page.locator("button#apply-button, a#apply-button").count()
@@ -332,6 +350,115 @@ class NaukriAgent(BaseAgent):
 
     # ── Form auto-fill helpers ───────────────────────────────────────────
 
+    # ── E4-S9: external company-site apply ────────────────────────────
+
+    async def _apply_external_naukri(self, job: dict) -> str:
+        """When apply_channel == "external" and we know the URL, jump straight
+        to it. Otherwise navigate to the Naukri listing, click "Apply on
+        company website", follow the popup."""
+        from .universal_filler import UniversalFormFiller
+        title = job.get("title", "?")
+        ext_url = job.get("external_apply_url")
+        target_page = self.page
+
+        if ext_url:
+            await self.page.goto(ext_url, wait_until="domcontentloaded", timeout=30000)
+            await self.human_delay(2, 3.5)
+        else:
+            url = job.get("url", "")
+            if not url:
+                return "skipped"
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await self.human_delay(1.5, 3)
+            company_apply = self.page.locator(
+                "a:has-text('Apply on company'), button:has-text('Apply on company'), "
+                "a:has-text('Apply on Company')"
+            ).first
+            if not await company_apply.count():
+                logger.warning(f"[Naukri-external] no 'Apply on company' button: {title}")
+                return "failed"
+            return await self._apply_external_via_button(job, company_apply)
+
+        # Universal filler against the loaded company page
+        result = await UniversalFormFiller(target_page, self.profile).run()
+        logger.info(
+            f"[Naukri-external] {title} — pages={result.pages_filled} "
+            f"filled={result.fields_filled} reached_review={result.reached_review} "
+            f"reason={result.reason!r}"
+        )
+        return await self._wait_for_submit(target_page, result.reached_review)
+
+    async def _apply_external_via_button(self, job: dict, button_locator) -> str:
+        """Click the "Apply on company site" button, switch to the popup tab
+        if one opens, then run UniversalFormFiller on whatever page loads."""
+        from .universal_filler import UniversalFormFiller
+        title = job.get("title", "?")
+        ctx = self._context
+        target_page = self.page
+
+        popup_promise = None
+        if ctx is not None:
+            popup_promise = asyncio.ensure_future(
+                ctx.wait_for_event("page", timeout=10000)
+            )
+        try:
+            await button_locator.scroll_into_view_if_needed()
+            await button_locator.click()
+        except Exception as e:
+            logger.warning(f"[Naukri-external] button click failed: {e}")
+            if popup_promise and not popup_promise.done():
+                popup_promise.cancel()
+            return "failed"
+
+        # Either a popup opens or the current tab navigates.
+        if popup_promise:
+            try:
+                new_page = await popup_promise
+                if new_page:
+                    target_page = new_page
+                    await new_page.wait_for_load_state("domcontentloaded", timeout=20000)
+            except Exception:
+                # No popup — current tab navigated instead.
+                pass
+        await self.human_delay(2, 3.5)
+
+        result = await UniversalFormFiller(target_page, self.profile).run()
+        logger.info(
+            f"[Naukri-external-via-button] {title} — pages={result.pages_filled} "
+            f"filled={result.fields_filled} reached_review={result.reached_review} "
+            f"reason={result.reason!r}"
+        )
+        return await self._wait_for_submit(target_page, result.reached_review)
+
+    async def _wait_for_submit(self, page, reached_review: bool) -> str:
+        """Wait up to 120s for user-driven submit; detect via URL or banner."""
+        success_signals = [
+            "text=/thank you for applying/i",
+            "text=/application submitted/i",
+            "text=/we[' ]?ve received your application/i",
+            "text=/successfully\\s+applied/i",
+            "text=/application received/i",
+        ]
+        try:
+            start_url = page.url
+            elapsed = 0.0
+            while elapsed < 120:
+                for sig in success_signals:
+                    try:
+                        if await page.locator(sig).first.is_visible(timeout=200):
+                            return "applied"
+                    except Exception:
+                        pass
+                cur = page.url
+                if cur != start_url and any(seg in cur.lower() for seg in
+                                            ("thank", "success", "confirm", "complete", "received")):
+                    return "applied"
+                await asyncio.sleep(1.5)
+                elapsed += 1.5
+        except Exception as e:
+            logger.debug(f"[Naukri-external] submit wait error: {e}")
+        return "skipped" if reached_review else "failed"
+
     async def _fill_naukri_form(self):
         """Naukri's apply UX is a chatbot panel that reveals one question
         at a time. Run multiple passes — fill what's visible, wait for the
@@ -383,6 +510,43 @@ class NaukriAgent(BaseAgent):
                 break
             await self.human_delay(0.6, 1.2)
         logger.info(f"[Naukri] form auto-fill done after {pass_num + 1} pass(es)")
+
+        # E4-S9 / V1.1 auto-submit: when the user has opted in, also click
+        # Naukri's chatbot final Submit/Save/Apply button. Default off.
+        if self.profile.get("auto_submit_enabled"):
+            try:
+                clicked = await self._click_naukri_submit()
+                if clicked:
+                    logger.warning("[Naukri] AUTO-SUBMITTED chatbot apply")
+            except Exception as e:
+                logger.debug(f"[Naukri] auto-submit error: {e}")
+
+    async def _click_naukri_submit(self) -> bool:
+        """Find and click the chatbot's final Submit/Save/Apply button."""
+        for sel in [
+            "button:has-text('Submit')",
+            "button:has-text('Save')",
+            "button:has-text('Apply')",
+            "div[class*='apply']:has-text('Submit')",
+            "div[role='button']:has-text('Submit')",
+        ]:
+            try:
+                el = self.page.locator(sel).first
+                if await el.count() and await el.is_visible(timeout=500):
+                    txt = (await el.inner_text() or "").lower()
+                    # Don't click "Apply" if it's the listing-level button
+                    # (those have id="apply-button" handled earlier)
+                    btn_id = (await el.get_attribute("id")) or ""
+                    if btn_id == "apply-button":
+                        continue
+                    if any(w in txt for w in ("submit", "save", "send", "complete")):
+                        await el.scroll_into_view_if_needed()
+                        await el.click()
+                        await self.human_delay(1, 2)
+                        return True
+            except Exception:
+                continue
+        return False
 
     async def _fill_visible_inputs(self, profile_map: dict) -> int:
         """Fill every visible, empty <input>/<textarea> we can map by its
