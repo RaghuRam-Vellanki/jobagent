@@ -19,6 +19,13 @@ def _profile_to_dict(p: Profile) -> dict:
         skills = json.loads(p.skills) if p.skills else []
     except Exception:
         skills = [s.strip() for s in (p.skills or "").split(",") if s.strip()]
+    preferred_cities: list[str] = []
+    try:
+        preferred_cities = json.loads(p.preferred_cities) if p.preferred_cities else []
+        if not isinstance(preferred_cities, list):
+            preferred_cities = []
+    except Exception:
+        preferred_cities = []
     return {
         "id": p.id,
         "full_name": p.full_name,
@@ -45,6 +52,12 @@ def _profile_to_dict(p: Profile) -> dict:
         "daily_apply_limit": p.daily_apply_limit,
         "delay_min": p.delay_min,
         "delay_max": p.delay_max,
+        # V1 fields
+        "persona": p.persona or "early_career",
+        "preferred_cities": preferred_cities,
+        "graduation_year": p.graduation_year,
+        "auto_run_enabled": bool(p.auto_run_enabled),
+        "auto_run_time": p.auto_run_time or "09:00",
     }
 
 
@@ -69,6 +82,8 @@ def update_profile(payload: dict, db: Session = Depends(get_db), current_user: U
         "portfolio_url", "cover_letter_template", "location_filter",
         "experience_level", "job_type", "date_posted", "match_threshold",
         "daily_queue_limit", "daily_apply_limit", "delay_min", "delay_max",
+        # V1 scalar fields
+        "persona", "graduation_year", "auto_run_enabled", "auto_run_time",
     }
     for key, val in payload.items():
         if key in field_map:
@@ -77,6 +92,9 @@ def update_profile(payload: dict, db: Session = Depends(get_db), current_user: U
             p.skills = json.dumps(val)
         elif key == "search_keywords" and isinstance(val, list):
             p.search_keywords = ",".join(val)
+        elif key == "preferred_cities" and isinstance(val, list):
+            cities = [str(c).strip() for c in val if str(c).strip()]
+            p.preferred_cities = json.dumps(cities)
 
     db.commit()
     return _profile_to_dict(p)
