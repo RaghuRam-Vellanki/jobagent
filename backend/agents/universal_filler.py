@@ -122,6 +122,25 @@ class UniversalFormFiller:
         except Exception as e:
             logger.debug(f"workday preflow error: {e}")
 
+        # Generic "expose the form" preflow: many ATS pages (Greenhouse,
+        # Lever, iCIMS, Pinterest's portal) show the job description first
+        # with an "Apply" button that reveals the form. Click it before
+        # field-scanning. Distinct from SUBMIT_BLACKLIST — those say
+        # "Submit"/"Apply Now". The buttons we click here say "Apply" /
+        # "Apply for this job" / "Start application" — pre-form CTAs.
+        try:
+            await self._click_apply_cta()
+        except Exception as e:
+            logger.debug(f"apply CTA preflow error: {e}")
+
+        # If the form lives inside an iframe (Greenhouse modal, Workday
+        # widget), switch our scanning context into it. Best-effort —
+        # if no iframe is found we keep using the main page.
+        try:
+            await self._maybe_switch_to_form_iframe()
+        except Exception as e:
+            logger.debug(f"iframe switch error: {e}")
+
         # E4-S10: Google Forms have a fundamentally different DOM shape
         # (role="listitem" question containers, no <label for=>) — handle
         # them via a dedicated walker before the generic input scanner.
@@ -150,6 +169,12 @@ class UniversalFormFiller:
             filled_this_pass = await self._fill_visible_fields()
             self.result.fields_filled += filled_this_pass
             self.result.pages_filled = pass_idx
+
+            if filled_this_pass == 0 and pass_idx == 1:
+                # First pass with zero fills — likely a CTA-gated or iframe
+                # page. Dump diagnostics so the next failing case is fixable
+                # without a screenshot.
+                await self._diagnose_empty_page()
 
             advanced = await self._click_nav_button()
             if not advanced:
@@ -472,6 +497,135 @@ class UniversalFormFiller:
             logger.debug(f"click_nav_button error: {e}")
             return False
 
+
+    async def _click_apply_cta(self) -> bool:
+        """Click an 'Apply' / 'Apply for this job' / 'Start application' CTA
+        that reveals the form. Distinct from SUBMIT_BLACKLIST — these are
+        pre-form buttons, not the final submission. Returns True on click."""
+        # Patterns that should be CLICKED to expose the form. Order matters —
+        # most specific first so we don't accidentally click a "Submit" labeled
+        # as "Apply" on a form-already-visible page.
+        apply_cta_patterns = [
+            r"^apply for this job$",
+            r"^apply for this position$",
+            r"^apply for job$",
+            r"^start (your )?application$",
+            r"^begin (your )?application$",
+            r"^i'?m interested$",
+            r"^apply manually$",  # already in workday preflow but harmless here
+        ]
+        # Generic "Apply" — click only if NO inputs are visible yet (otherwise
+        # we might click a button that's actually the final submission).
+        try:
+            visible_inputs = await self.page.locator(
+                "input:not([type=hidden]):not([type=submit]):not([type=button]), select, textarea"
+            ).count()
+        except Exception:
+            visible_inputs = 0
+
+        try:
+            for tag in ("button", "a", "[role=button]", "input[type=submit]"):
+                loc = self.page.locator(tag)
+                count = await loc.count()
+                for i in range(min(count, 60)):
+                    el = loc.nth(i)
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        text = (await el.inner_text() or "").strip()
+                        if not text:
+                            text = (await el.get_attribute("value") or "").strip()
+                        if not text:
+                            text = (await el.get_attribute("aria-label") or "").strip()
+                        low = text.strip().lower()
+                        if not low or len(low) > 80:
+                            continue
+                        # Specific pre-form CTAs always OK to click
+                        if any(re.search(p, low) for p in apply_cta_patterns):
+                            await el.scroll_into_view_if_needed()
+                            await el.click()
+                            logger.info(f"[universal-filler] clicked apply CTA: {text!r}")
+                            await asyncio.sleep(1.5)
+                            return True
+                        # Plain "Apply" — only when no form is already on the page
+                        if visible_inputs == 0 and re.fullmatch(r"apply\s*", low):
+                            await el.scroll_into_view_if_needed()
+                            await el.click()
+                            logger.info(f"[universal-filler] clicked plain Apply CTA (no inputs visible): {text!r}")
+                            await asyncio.sleep(1.5)
+                            return True
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"_click_apply_cta error: {e}")
+        return False
+
+    async def _maybe_switch_to_form_iframe(self):
+        """If the form is inside an iframe (common with Greenhouse modal
+        and Workday widgets), switch self.page to that iframe's page-like
+        Frame interface so subsequent scans land in the right document."""
+        try:
+            # Quick exit if the main page already has form fields
+            main_inputs = await self.page.locator("input:not([type=hidden]), select, textarea").count()
+            if main_inputs > 0:
+                return
+            # Look for an iframe containing form fields
+            frames = self.page.frames
+            for fr in frames:
+                if fr == self.page.main_frame:
+                    continue
+                try:
+                    fr_inputs = await fr.locator("input:not([type=hidden]), select, textarea").count()
+                    if fr_inputs > 0:
+                        logger.info(f"[universal-filler] switching to iframe: {fr.url} ({fr_inputs} inputs)")
+                        # Replace self.page with the frame for scanning purposes.
+                        # Frame supports .locator/.query_selector_all/.url just like Page.
+                        self.page = fr  # type: ignore[assignment]
+                        return
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"iframe scan error: {e}")
+
+    async def _diagnose_empty_page(self):
+        """When no fields got filled, log what was actually on the page so we
+        can iterate. Counts inputs/selects/textareas/iframes/forms."""
+        try:
+            counts = {}
+            for sel, name in [
+                ("input", "inputs"),
+                ("select", "selects"),
+                ("textarea", "textareas"),
+                ("form", "forms"),
+                ("iframe", "iframes"),
+                ("button", "buttons"),
+                ("[role='listitem']", "role=listitem"),
+            ]:
+                try:
+                    counts[name] = await self.page.locator(sel).count()
+                except Exception:
+                    counts[name] = -1
+            url = getattr(self.page, "url", "?")
+            logger.warning(f"[universal-filler] EMPTY-PAGE diagnostic url={url} counts={counts}")
+            # Sample the first 5 visible button texts — helps us find the
+            # right pre-form CTA name to add to apply_cta_patterns.
+            samples: list[str] = []
+            btns = await self.page.locator("button, a, [role=button]").all()
+            for b in btns[:25]:
+                try:
+                    if not await b.is_visible():
+                        continue
+                    t = (await b.inner_text() or "").strip()
+                    if t and len(t) < 60:
+                        samples.append(t)
+                    if len(samples) >= 8:
+                        break
+                except Exception:
+                    continue
+            if samples:
+                logger.warning(f"[universal-filler] sample buttons: {samples}")
+        except Exception as e:
+            logger.debug(f"diagnostic dump error: {e}")
 
     async def _click_submit_button(self) -> bool:
         """Auto-submit (only called when self.auto_submit is True). Looks for a
