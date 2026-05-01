@@ -62,6 +62,8 @@ _V1_COLUMNS = [
     ("profile", "graduation_year", "graduation_year INTEGER"),
     ("profile", "auto_run_enabled", "auto_run_enabled BOOLEAN NOT NULL DEFAULT 0"),
     ("profile", "auto_run_time", "auto_run_time VARCHAR(8) NOT NULL DEFAULT '09:00'"),
+    ("profile", "email_notifications_enabled", "email_notifications_enabled BOOLEAN NOT NULL DEFAULT 0"),
+    ("profile", "notification_email", "notification_email VARCHAR NOT NULL DEFAULT ''"),
     ("jobs", "apply_channel", "apply_channel VARCHAR(16) NOT NULL DEFAULT 'external'"),
     ("jobs", "external_apply_url", "external_apply_url TEXT"),
 ]

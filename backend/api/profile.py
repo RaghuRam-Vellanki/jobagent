@@ -58,6 +58,9 @@ def _profile_to_dict(p: Profile) -> dict:
         "graduation_year": p.graduation_year,
         "auto_run_enabled": bool(p.auto_run_enabled),
         "auto_run_time": p.auto_run_time or "09:00",
+        # V1.1
+        "email_notifications_enabled": bool(p.email_notifications_enabled),
+        "notification_email": p.notification_email or "",
     }
 
 
@@ -84,6 +87,8 @@ def update_profile(payload: dict, db: Session = Depends(get_db), current_user: U
         "daily_queue_limit", "daily_apply_limit", "delay_min", "delay_max",
         # V1 scalar fields
         "persona", "graduation_year", "auto_run_enabled", "auto_run_time",
+        # V1.1 email
+        "email_notifications_enabled", "notification_email",
     }
     for key, val in payload.items():
         if key in field_map:

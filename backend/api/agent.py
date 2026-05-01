@@ -186,6 +186,9 @@ def _get_profile_dict(db: Session, user_id: int) -> dict:
         # V1 fields used by scorer
         "persona": p.persona or "early_career",
         "preferred_cities": preferred_cities,
+        # V1.1 fields used by email notifications
+        "email_notifications_enabled": bool(p.email_notifications_enabled),
+        "notification_email": p.notification_email or "",
     }
 
 
@@ -409,6 +412,20 @@ async def _run_apply(user_id: int):
                         _inc_stat(db, "applied", user_id)
                         applied_today += 1
                         _log(f"✅ Applied: {job.title} [{applied_today}/{apply_limit}]", user_id)
+                        # E5-S5: per-job email notification (best-effort, never
+                        # blocks the apply pipeline)
+                        try:
+                            from notifications import send_apply_email
+                            sent = send_apply_email(profile, {
+                                "title": job.title, "company": job.company,
+                                "location": job.location, "url": job.url,
+                                "platform": job.platform, "match_score": job.match_score,
+                                "applied_at": job.applied_at.strftime("%Y-%m-%d %H:%M UTC"),
+                            })
+                            if sent:
+                                _log(f"✉️  Email sent for {job.title}", user_id)
+                        except Exception as e:
+                            logger.debug(f"email notify error: {e}")
                     elif result == "failed":
                         job.status = "FAILED"
                         db.commit()

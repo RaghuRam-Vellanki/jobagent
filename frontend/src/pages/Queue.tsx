@@ -5,9 +5,12 @@ import { Job } from '../lib/types'
 import { ScoreRing } from '../components/ScoreRing'
 import { PlatformBadge } from '../components/PlatformBadge'
 import { Check, X, ExternalLink, CheckCheck, Send } from 'lucide-react'
+import { useAgentStore } from '../store/agentStore'
 
 export default function Queue() {
   const qc = useQueryClient()
+  const phase = useAgentStore(s => s.phase)
+  const running = useAgentStore(s => s.running)
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({})
   const [bulkMin, setBulkMin] = useState<number>(60)
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -46,9 +49,26 @@ export default function Queue() {
     setBulkBusy(true)
     try {
       const res = await approveAll(bulkMin)
-      setBulkMsg(`Approved ${res.approved} job${res.approved === 1 ? '' : 's'} (≥ ${bulkMin})`)
+      const approved = res.approved ?? 0
       qc.invalidateQueries({ queryKey: ['jobs'] })
-      setTimeout(() => setBulkMsg(''), 4000)
+
+      // E2-S7: auto-trigger apply if the agent is idle. If it's mid-discovery
+      // or already applying, the user must wait for that phase to finish — we
+      // don't preempt it (the apply phase will see APPROVED jobs on its next
+      // run anyway).
+      if (approved > 0 && !running && phase === 'idle') {
+        try {
+          await startApply()
+          setBulkMsg(`Approved ${approved} — applying now…`)
+        } catch (e: any) {
+          setBulkMsg(`Approved ${approved} — couldn't auto-start apply (${e?.message || 'unknown'})`)
+        }
+      } else if (approved > 0 && (running || phase !== 'idle')) {
+        setBulkMsg(`Approved ${approved} — agent busy, will apply after current run`)
+      } else {
+        setBulkMsg(`Approved ${approved} job${approved === 1 ? '' : 's'} (≥ ${bulkMin})`)
+      }
+      setTimeout(() => setBulkMsg(''), 5000)
     } finally {
       setBulkBusy(false)
     }

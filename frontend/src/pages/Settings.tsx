@@ -268,6 +268,53 @@ export default function Settings() {
                 </div>
               )}
             </div>
+
+            <div className="border-t border-border pt-5">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-sm font-semibold text-text">Email me after each apply</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    Sends an email with title, company, URL, and match score every time a job lands as APPLIED.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(form.email_notifications_enabled)}
+                  onClick={() => setField('email_notifications_enabled', !form.email_notifications_enabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                    form.email_notifications_enabled ? 'bg-accent' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
+                      form.email_notifications_enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {Boolean(form.email_notifications_enabled) && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field
+                      label="Send to email"
+                      value={String(form.notification_email ?? '')}
+                      onChange={v => setField('notification_email', v)}
+                      type="email"
+                    />
+                  </div>
+                  <div className="text-xs text-muted mt-2 leading-relaxed">
+                    Leave blank to use your account email. Requires SMTP credentials in
+                    <code className="bg-gray-100 px-1 rounded mx-1">.env</code>
+                    (<code className="bg-gray-100 px-1 rounded">SMTP_HOST</code>,
+                    <code className="bg-gray-100 px-1 rounded mx-1">SMTP_USER</code>,
+                    <code className="bg-gray-100 px-1 rounded">SMTP_PASSWORD</code>).
+                    Gmail: use an App Password.
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
       </div>

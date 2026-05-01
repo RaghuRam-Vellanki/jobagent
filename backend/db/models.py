@@ -103,6 +103,11 @@ class Profile(Base):
     # V1: HH:MM (IST) string for daily auto-run time
     auto_run_time = Column(String(8), default="09:00", nullable=False)
 
+    # V1.1: per-job email notifications after successful apply
+    email_notifications_enabled = Column(Boolean, default=False, nullable=False)
+    # V1.1: email recipient for notifications (defaults to profile.email if blank)
+    notification_email = Column(String, default="", nullable=False)
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
