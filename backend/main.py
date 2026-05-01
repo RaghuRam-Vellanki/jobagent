@@ -19,6 +19,7 @@ from api.profile import router as profile_router
 from api.ats import router as ats_router
 from api.stats import router as stats_router
 from config import FRONTEND_ORIGIN
+from scheduler import scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,7 +31,11 @@ logging.basicConfig(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    yield
+    scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
 
 
 app = FastAPI(title="JobAgent API", version="2.0.0", lifespan=lifespan)

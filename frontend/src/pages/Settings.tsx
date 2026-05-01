@@ -218,11 +218,56 @@ export default function Settings() {
 
         {/* Limits tab */}
         {tab === 'limits' && (
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Daily Queue Limit" value={String(form.daily_queue_limit ?? 50)} onChange={v => setField('daily_queue_limit', Number(v))} type="number" />
-            <Field label="Daily Apply Limit" value={String(form.daily_apply_limit ?? 25)} onChange={v => setField('daily_apply_limit', Number(v))} type="number" />
-            <Field label="Min Delay (seconds)" value={String(form.delay_min ?? 4)} onChange={v => setField('delay_min', Number(v))} type="number" />
-            <Field label="Max Delay (seconds)" value={String(form.delay_max ?? 10)} onChange={v => setField('delay_max', Number(v))} type="number" />
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Daily Queue Limit" value={String(form.daily_queue_limit ?? 50)} onChange={v => setField('daily_queue_limit', Number(v))} type="number" />
+              <Field label="Daily Apply Limit" value={String(form.daily_apply_limit ?? 25)} onChange={v => setField('daily_apply_limit', Number(v))} type="number" />
+              <Field label="Min Delay (seconds)" value={String(form.delay_min ?? 4)} onChange={v => setField('delay_min', Number(v))} type="number" />
+              <Field label="Max Delay (seconds)" value={String(form.delay_max ?? 10)} onChange={v => setField('delay_max', Number(v))} type="number" />
+            </div>
+
+            <div className="border-t border-border pt-5">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-sm font-semibold text-text">Daily auto-run</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    Run discovery + apply automatically every day at the chosen time (IST).
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(form.auto_run_enabled)}
+                  onClick={() => setField('auto_run_enabled', !form.auto_run_enabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                    form.auto_run_enabled ? 'bg-accent' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
+                      form.auto_run_enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {Boolean(form.auto_run_enabled) && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-muted mb-1.5">Run time (IST, 24h)</label>
+                    <input
+                      type="time"
+                      value={String(form.auto_run_time || '09:00')}
+                      onChange={e => setField('auto_run_time', e.target.value)}
+                      className="w-full border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                    />
+                    <div className="text-xs text-muted mt-1">
+                      Skipped silently if the agent is already running at that time.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
