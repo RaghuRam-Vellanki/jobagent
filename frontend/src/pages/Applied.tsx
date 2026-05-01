@@ -4,7 +4,7 @@ import { getJobs, updateJob } from '../lib/api'
 import { Job } from '../lib/types'
 import { PlatformBadge } from '../components/PlatformBadge'
 import { ScoreRing } from '../components/ScoreRing'
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, Download } from 'lucide-react'
 
 const RESPONSE_OPTIONS = [
   { value: 'no_response', label: 'No Response', color: 'bg-gray-100 text-gray-600' },
@@ -47,8 +47,36 @@ export default function Applied() {
           <h1 className="text-xl font-semibold text-text">Applied Jobs</h1>
           <p className="text-sm text-muted mt-0.5">Track responses and interview progress</p>
         </div>
-        <div className="text-sm text-muted">
-          <span className="font-semibold text-text">{data?.total ?? 0}</span> total applied
+        <div className="flex items-center gap-4">
+          <div className="text-sm text-muted">
+            <span className="font-semibold text-text">{data?.total ?? 0}</span> total applied
+          </div>
+          <a
+            href="/api/jobs/export.csv?status=APPLIED"
+            download
+            onClick={(e) => {
+              const t = localStorage.getItem('jobagent-auth')
+              const token = t ? JSON.parse(t).state?.token : null
+              if (!token) return
+              e.preventDefault()
+              fetch('/api/jobs/export.csv?status=APPLIED', {
+                headers: { Authorization: `Bearer ${token}` },
+              })
+                .then(r => r.blob())
+                .then(blob => {
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `jobagent-export-${new Date().toISOString().slice(0,10)}.csv`
+                  a.click()
+                  URL.revokeObjectURL(url)
+                })
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text rounded text-sm hover:border-accent hover:text-accent transition-colors"
+          >
+            <Download size={14} />
+            Export CSV
+          </a>
         </div>
       </div>
 

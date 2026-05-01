@@ -1,4 +1,7 @@
+import csv
+import io
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import datetime
@@ -31,6 +34,51 @@ def _job_to_dict(j: Job) -> dict:
         "discovered_at": j.discovered_at.isoformat() if j.discovered_at else None,
         "applied_at": j.applied_at.isoformat() if j.applied_at else None,
     }
+
+
+@router.get("/export.csv")
+def export_csv(
+    status: Optional[str] = Query("APPLIED", description="Comma-separated status filter; default APPLIED"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """E6-S3: download all jobs (default: APPLIED) as a UTF-8 CSV."""
+    q = db.query(Job).filter(Job.user_id == current_user.id)
+    if status:
+        statuses = [s.strip().upper() for s in status.split(",") if s.strip()]
+        if statuses:
+            q = q.filter(Job.status.in_(statuses))
+    rows = q.order_by(Job.applied_at.desc().nullslast(), Job.discovered_at.desc()).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "title", "company", "platform", "location", "status",
+        "match_score", "ats_score", "applied_at", "response_status",
+        "url", "matched_kws",
+    ])
+    for j in rows:
+        writer.writerow([
+            j.title or "",
+            j.company or "",
+            j.platform or "",
+            j.location or "",
+            j.status or "",
+            j.match_score if j.match_score is not None else "",
+            j.ats_score if j.ats_score is not None else "",
+            j.applied_at.isoformat() if j.applied_at else "",
+            j.response_status or "",
+            j.url or "",
+            (j.matched_kws or "").replace(",", "|"),
+        ])
+
+    buf.seek(0)
+    filename = f"jobagent-export-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("")
