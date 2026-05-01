@@ -95,7 +95,7 @@ export default function ATS() {
           <button
             onClick={handleScore}
             disabled={scoring || !jdText.trim()}
-            className="mt-3 flex items-center gap-2 px-4 py-2 bg-accent text-white rounded text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-colors"
+            className="mt-3 flex items-center gap-2 px-4 py-2 bg-accent text-white rounded text-sm font-medium hover:bg-[#4F46E5] disabled:opacity-40 transition-colors"
           >
             <RefreshCw size={14} className={scoring ? 'animate-spin' : ''} />
             {scoring ? 'Scoring...' : 'Score Resume'}

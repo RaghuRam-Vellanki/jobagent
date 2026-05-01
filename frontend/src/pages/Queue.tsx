@@ -1,22 +1,58 @@
 import React, { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getJobs, approveJob, rejectJob } from '../lib/api'
+import { getJobs, approveJob, rejectJob, approveAll, startApply } from '../lib/api'
 import { Job } from '../lib/types'
 import { ScoreRing } from '../components/ScoreRing'
 import { PlatformBadge } from '../components/PlatformBadge'
-import { Check, X, ExternalLink } from 'lucide-react'
+import { Check, X, ExternalLink, CheckCheck, Send } from 'lucide-react'
 
 export default function Queue() {
   const qc = useQueryClient()
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({})
+  const [bulkMin, setBulkMin] = useState<number>(60)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkMsg, setBulkMsg] = useState<string>('')
+  const [applyBusy, setApplyBusy] = useState(false)
 
   const { data } = useQuery({
     queryKey: ['jobs', 'queue'],
     queryFn: () => getJobs('QUEUED'),
     refetchInterval: 6_000,
   })
+  const { data: approvedData } = useQuery({
+    queryKey: ['jobs', 'approved'],
+    queryFn: () => getJobs('APPROVED'),
+    refetchInterval: 6_000,
+  })
 
   const jobs = data?.jobs ?? []
+  const approvedCount = approvedData?.total ?? 0
+  const eligible = jobs.filter((j: Job) => (j.match_score ?? 0) >= bulkMin).length
+
+  async function handleApplyApproved() {
+    if (applyBusy || approvedCount === 0) return
+    setApplyBusy(true)
+    try {
+      await startApply()
+    } finally {
+      // The agent runs async in the backend; clear our local "starting" lock
+      // after a moment. The Live Log on the Dashboard shows real progress.
+      setTimeout(() => setApplyBusy(false), 2000)
+    }
+  }
+
+  async function handleBulkApprove() {
+    if (!eligible) return
+    setBulkBusy(true)
+    try {
+      const res = await approveAll(bulkMin)
+      setBulkMsg(`Approved ${res.approved} job${res.approved === 1 ? '' : 's'} (≥ ${bulkMin})`)
+      qc.invalidateQueries({ queryKey: ['jobs'] })
+      setTimeout(() => setBulkMsg(''), 4000)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   async function handleApprove(jobId: string) {
     setActionLoading(prev => ({ ...prev, [jobId]: true }))
@@ -34,15 +70,59 @@ export default function Queue() {
 
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-semibold text-text">Review Queue</h1>
-          <p className="text-sm text-muted mt-0.5">Approve jobs to apply, reject to skip</p>
+          <p className="text-sm text-muted mt-0.5">Approve jobs you want to apply to. Click 'Apply now' above when ready.</p>
         </div>
-        <div className="text-sm text-muted">
-          <span className="font-semibold text-text">{jobs.length}</span> pending review
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 bg-white border border-border rounded-lg px-2 py-1.5">
+            <label className="text-xs text-muted">Approve all ≥</label>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={bulkMin}
+              onChange={e => setBulkMin(Number(e.target.value) || 0)}
+              className="w-14 border border-border rounded px-2 py-1 text-sm text-center focus:outline-none focus:ring-1 focus:ring-accent"
+            />
+            <button
+              onClick={handleBulkApprove}
+              disabled={bulkBusy || eligible === 0}
+              className="flex items-center gap-1 px-3 py-1 bg-success text-white rounded text-sm font-medium hover:bg-green-600 disabled:opacity-50 transition-colors"
+              title={eligible === 0 ? 'No jobs at or above this score' : `Will approve ${eligible} job(s)`}
+            >
+              <CheckCheck size={14} />
+              {bulkBusy ? '...' : `Approve ${eligible}`}
+            </button>
+          </div>
+          <div className="text-sm text-muted">
+            <span className="font-semibold text-text">{jobs.length}</span> pending
+          </div>
         </div>
       </div>
+      {bulkMsg && (
+        <div className="text-sm text-success bg-green-50 border border-green-100 rounded px-3 py-2">
+          {bulkMsg}
+        </div>
+      )}
+
+      {approvedCount > 0 && (
+        <div className="flex items-center justify-between gap-3 bg-blue-50 border border-blue-100 rounded-lg px-4 py-3">
+          <div className="text-sm">
+            <span className="font-semibold text-text">{approvedCount}</span>
+            <span className="text-muted"> job{approvedCount === 1 ? '' : 's'} approved and waiting to apply.</span>
+          </div>
+          <button
+            onClick={handleApplyApproved}
+            disabled={applyBusy}
+            className="flex items-center gap-1.5 px-4 py-2 bg-accent text-white rounded text-sm font-medium hover:bg-[#4F46E5] disabled:opacity-50 transition-colors"
+          >
+            <Send size={14} />
+            {applyBusy ? 'Starting…' : `Apply ${approvedCount} now`}
+          </button>
+        </div>
+      )}
 
       {jobs.length === 0 && (
         <div className="bg-white border border-border rounded-lg p-16 text-center">
@@ -102,9 +182,10 @@ export default function Queue() {
                 onClick={() => handleApprove(job.job_id)}
                 disabled={actionLoading[job.job_id]}
                 className="flex items-center gap-1.5 px-3 py-2 bg-success text-white rounded text-sm font-medium hover:bg-green-600 disabled:opacity-50 transition-colors"
+                title="Add to the approved list. Click 'Apply N now' above to actually submit."
               >
                 <Check size={14} />
-                Apply
+                Approve
               </button>
               <button
                 onClick={() => handleReject(job.job_id)}

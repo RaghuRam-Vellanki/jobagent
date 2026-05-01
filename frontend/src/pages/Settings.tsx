@@ -39,11 +39,17 @@ export default function Settings() {
     setSaved(false)
     try {
       await updateProfile(form)
-      // Save credentials
+      // Save credentials. Only send the password field when the user typed
+      // a new one — otherwise we'd blank the saved password on every save,
+      // since the form intentionally never echoes the stored password back.
       for (const p of PLATFORMS) {
         const c = creds[p]
-        if (c && (c.email || c.password)) {
-          await setCredentials(p, c)
+        if (!c) continue
+        const payload: { email?: string; password?: string } = {}
+        if (c.email) payload.email = c.email
+        if (c.password) payload.password = c.password
+        if (Object.keys(payload).length > 0) {
+          await setCredentials(p, payload)
         }
       }
       qc.invalidateQueries({ queryKey: ['profile'] })
@@ -71,7 +77,7 @@ export default function Settings() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded text-sm font-medium hover:bg-blue-600 disabled:opacity-40 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded text-sm font-medium hover:bg-[#4F46E5] disabled:opacity-40 transition-colors"
         >
           <Save size={14} />
           {saving ? 'Saving...' : saved ? '✅ Saved!' : 'Save All'}

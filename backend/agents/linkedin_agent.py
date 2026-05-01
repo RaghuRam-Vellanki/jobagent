@@ -231,12 +231,19 @@ class LinkedInAgent(BaseAgent):
         title = job.get("title", "?")
         company = job.get("company", "?")
         url = job.get("url", "")
+        apply_channel = job.get("apply_channel") or (
+            "easy_apply" if job.get("easy_apply") else "external"
+        )
 
-        logger.info(f"[LinkedIn] Applying: {title} @ {company}")
+        logger.info(f"[LinkedIn] Applying ({apply_channel}): {title} @ {company}")
         try:
             if url and url not in self.page.url:
                 await self.page.goto(url)
                 await self.human_delay(2.5, 4)
+
+            # V1: external-redirect path — "Apply on company website"
+            if apply_channel == "external":
+                return await self._apply_external(job)
 
             if not await self._click_easy_apply():
                 logger.warning(f"[LinkedIn] No Easy Apply btn: {title}")
@@ -269,6 +276,105 @@ class LinkedInAgent(BaseAgent):
             logger.error(f"[LinkedIn] Exception: {title} — {e}")
             await self._dismiss()
             return "failed"
+
+    async def _apply_external(self, job: dict) -> str:
+        """Follow LinkedIn's "Apply on company website" link off-board, then
+        run the UniversalFormFiller on whatever page loads (custom careers
+        page, Workday, Greenhouse, Ashby, Lever, iCIMS, etc.).
+        """
+        from .universal_filler import UniversalFormFiller
+        title = job.get("title", "?")
+
+        # If we already captured the redirect target at discovery time, jump
+        # straight to it; otherwise click the LinkedIn external-apply button
+        # and follow whatever popup/new-tab opens.
+        target = job.get("external_apply_url")
+        target_page = self.page
+
+        if target:
+            await self.page.goto(target, wait_until="domcontentloaded", timeout=30000)
+            await self.human_delay(2, 3.5)
+        else:
+            # Find the "Apply" button (LinkedIn renders it as the same
+            # `.jobs-apply-button` selector but the label is "Apply" not
+            # "Easy Apply" for off-board jobs).
+            ctx = self._context
+            popup_promise = ctx.wait_for_event("page", timeout=10000) if ctx else None
+            clicked = False
+            for sel in [
+                "button.jobs-apply-button",
+                ".jobs-apply-button--top-card button",
+            ]:
+                try:
+                    btns = await self.page.locator(sel).all()
+                    for b in btns:
+                        label = (
+                            await b.inner_text() + " " + (await b.get_attribute("aria-label") or "")
+                        ).lower()
+                        if "easy apply" in label:
+                            continue  # this method only handles external
+                        if not await b.is_visible():
+                            continue
+                        await b.scroll_into_view_if_needed()
+                        await b.click()
+                        clicked = True
+                        break
+                    if clicked:
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                logger.warning(f"[LinkedIn] No external Apply button found: {title}")
+                return "skipped"
+
+            # LinkedIn opens the employer page in a new tab — switch to it.
+            try:
+                if popup_promise:
+                    new_page = await popup_promise
+                    if new_page:
+                        target_page = new_page
+                        await new_page.wait_for_load_state("domcontentloaded", timeout=20000)
+            except Exception as e:
+                logger.debug(f"[LinkedIn] external popup wait: {e}")
+            await self.human_delay(2, 3.5)
+
+        # Run the universal filler on whatever loaded.
+        uff = UniversalFormFiller(target_page, self.profile)
+        result = await uff.run()
+        logger.info(
+            f"[LinkedIn-external] {title} — pages={result.pages_filled} "
+            f"filled={result.fields_filled} reached_review={result.reached_review} "
+            f"reason={result.reason!r}"
+        )
+
+        # Wait briefly for user-driven submit (URL/banner heuristic).
+        success_signals = [
+            "text=/thank you for applying/i",
+            "text=/application submitted/i",
+            "text=/we[' ]?ve received your application/i",
+            "text=/successfully\\s+applied/i",
+        ]
+        try:
+            start_url = target_page.url
+            elapsed = 0.0
+            while elapsed < 120:
+                for sig in success_signals:
+                    try:
+                        if await target_page.locator(sig).first.is_visible(timeout=200):
+                            return "applied"
+                    except Exception:
+                        pass
+                cur = target_page.url
+                if cur != start_url and any(seg in cur.lower() for seg in
+                                            ("thank", "success", "confirm", "complete")):
+                    return "applied"
+                import asyncio as _a
+                await _a.sleep(1.5)
+                elapsed += 1.5
+        except Exception as e:
+            logger.debug(f"[LinkedIn-external] success-wait error: {e}")
+
+        return "skipped" if result.reached_review else "failed"
 
     async def _click_easy_apply(self) -> bool:
         for sel in [

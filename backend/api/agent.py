@@ -19,8 +19,8 @@ from db.models import Job, DailyStats, Profile, Credential, User
 from scoring.semantic_scorer import score_job, DEFAULT_SKILLS
 from agents.linkedin_agent import LinkedInAgent
 from agents.naukri_agent import NaukriAgent
-from agents.internshala_agent import IntersthalaAgent
-from agents.unstop_agent import UnstopAgent
+from agents.ats_aggregator_agent import ATSAggregatorAgent
+# Internshala + Unstop descoped 2026-04-26 — files retained for reversibility
 from auth_utils import get_current_user, decode_token
 
 router = APIRouter(prefix="/api/agent", tags=["agent"])
@@ -116,6 +116,12 @@ def _inc_stat(db: Session, field: str, user_id: int, n: int = 1):
 def _save_job(db: Session, info: dict, status: str, user_id: int,
               score: float = 0, matched: list | None = None, skip_reason: str | None = None):
     try:
+        # V1: derive apply_channel — scrapers may set it explicitly; otherwise
+        # fall back from the legacy `easy_apply` boolean. Default is "external".
+        apply_channel = info.get("apply_channel")
+        if not apply_channel:
+            apply_channel = "easy_apply" if info.get("easy_apply") else "external"
+
         j = Job(
             user_id=user_id,
             job_id=info.get("job_id", ""),
@@ -129,6 +135,8 @@ def _save_job(db: Session, info: dict, status: str, user_id: int,
             matched_kws=",".join(matched or []),
             status=status,
             skip_reason=skip_reason,
+            apply_channel=apply_channel,
+            external_apply_url=info.get("external_apply_url"),
             discovered_at=datetime.utcnow(),
         )
         db.add(j)
@@ -188,19 +196,20 @@ async def _run_discovery(platforms: list[str], user_id: int):
     st = _get_user_state(user_id)
     try:
         profile = _get_profile_dict(db, user_id)
-        keywords = profile.get("search_keywords", ["Product Manager"])
-        location = profile.get("location_filter", "India")
-        threshold = profile.get("match_threshold", 60)
-        queue_limit = profile.get("daily_queue_limit", 50)
-        skills = profile.get("skills", DEFAULT_SKILLS)
+        # Use `or` rather than dict.get's default so empty lists from the UI
+        # still fall back to sensible defaults (otherwise discovery does nothing).
+        keywords = profile.get("search_keywords") or ["Product Manager"]
+        location = profile.get("location_filter") or "India"
+        threshold = profile.get("match_threshold") or 60
+        queue_limit = profile.get("daily_queue_limit") or 50
+        skills = profile.get("skills") or DEFAULT_SKILLS
         filters = {"date_posted": profile.get("date_posted", "r86400")}
 
         queued_today = 0
         agent_classes = {
             "linkedin": LinkedInAgent,
             "naukri": NaukriAgent,
-            "internshala": IntersthalaAgent,
-            "unstop": UnstopAgent,
+            "ats": ATSAggregatorAgent,
         }
 
         for platform in platforms:
@@ -218,7 +227,10 @@ async def _run_discovery(platforms: list[str], user_id: int):
 
             _log(f"🔍 Starting {platform.capitalize()} discovery...", user_id)
             try:
-                headless = platform != "linkedin"
+                # LinkedIn always needs a visible window for manual login;
+                # other platforms can opt in via `requires_visible_browser`
+                # (Naukri does — its anti-bot serves a blank SPA to headless).
+                headless = not (platform == "linkedin" or getattr(AgentClass, "requires_visible_browser", False))
                 await agent.start(headless=headless)
                 logged_in = await agent.login()
                 if not logged_in:
@@ -301,74 +313,106 @@ async def _run_discovery(platforms: list[str], user_id: int):
 
 # ── Apply orchestrator ────────────────────────────────────────────────
 
+_APPLY_AGENT_CLASSES = {
+    "linkedin": LinkedInAgent,
+    "naukri": NaukriAgent,
+    "ats": ATSAggregatorAgent,
+}
+
+
 async def _run_apply(user_id: int):
     db = SessionLocal()
     st = _get_user_state(user_id)
     try:
         profile = _get_profile_dict(db, user_id)
-        apply_limit = profile.get("daily_apply_limit", 25)
-        delay_min = profile.get("delay_min", 4)
-        delay_max = profile.get("delay_max", 10)
-        credentials = _get_credentials(db, "linkedin", user_id)
-
-        agent = LinkedInAgent(profile=profile, credentials=credentials)
-        await agent.start(headless=False)
-
-        _log("🔐 Logging into LinkedIn for apply phase...", user_id)
-        if not await agent.login():
-            _log("❌ LinkedIn login failed — cannot apply.", user_id)
-            return
+        apply_limit = profile.get("daily_apply_limit") or 25
+        delay_min = profile.get("delay_min") or 4
+        delay_max = profile.get("delay_max") or 10
 
         applied_today = 0
         st["phase"] = "applying"
 
-        while st["running"]:
-            while st["paused"]:
-                await asyncio.sleep(2)
+        # Group APPROVED jobs by platform so we open one browser per platform
+        # instead of restarting it per job. Highest-scoring jobs first.
+        approved = db.query(Job).filter_by(user_id=user_id, status="APPROVED") \
+            .order_by(Job.match_score.desc()).all()
+        if not approved:
+            _log("📭 No approved jobs to apply to. Approve some from the Queue first.", user_id)
+            return
+        by_platform: dict[str, list[Job]] = {}
+        for j in approved:
+            by_platform.setdefault(j.platform or "linkedin", []).append(j)
 
+        for platform, jobs in by_platform.items():
+            if not st["running"]:
+                break
             if applied_today >= apply_limit:
-                _log(f"🎯 Daily apply limit ({apply_limit}) reached.", user_id)
                 break
 
-            job = db.query(Job).filter_by(user_id=user_id, status="APPROVED").order_by(
-                Job.match_score.desc()
-            ).first()
-
-            if not job:
-                await asyncio.sleep(5)
-                db.expire_all()
+            AgentClass = _APPLY_AGENT_CLASSES.get(platform)
+            if not AgentClass:
+                _log(f"⚠️ No agent for platform '{platform}' — skipping {len(jobs)} job(s)", user_id)
                 continue
 
-            st["current_job"] = f"{job.title} @ {job.company}"
-            _schedule_broadcast({"type": "stats", "state": {k: v for k, v in st.items() if k != "log"}}, user_id)
-            _log(f"🚀 Applying [{job.match_score}]: {job.title} @ {job.company}", user_id)
+            credentials = _get_credentials(db, platform, user_id)
+            agent = AgentClass(profile=profile, credentials=credentials)
+            # LinkedIn always needs a visible window (manual login). Other
+            # platforms opt in via requires_visible_browser (Naukri does).
+            headless = not (platform == "linkedin" or getattr(AgentClass, "requires_visible_browser", False))
+            await agent.start(headless=headless)
 
-            result = await agent.apply_to_job({
-                "job_id": job.job_id, "title": job.title, "company": job.company,
-                "url": job.url, "description": job.description,
-            })
+            try:
+                _log(f"🔐 Logging into {platform.capitalize()} for apply phase...", user_id)
+                if not await agent.login():
+                    _log(f"❌ {platform.capitalize()} login failed — skipping {len(jobs)} job(s)", user_id)
+                    continue
+                _log(f"✅ {platform.capitalize()} ready — {len(jobs)} approved job(s)", user_id)
 
-            if result == "applied":
-                job.status = "APPLIED"
-                job.applied_at = datetime.utcnow()
-                db.commit()
-                _inc_stat(db, "applied", user_id)
-                applied_today += 1
-                _log(f"✅ Applied: {job.title} [{applied_today}/{apply_limit}]", user_id)
-            elif result == "failed":
-                job.status = "FAILED"
-                db.commit()
-                _inc_stat(db, "failed", user_id)
-                _log(f"❌ Failed: {job.title}", user_id)
-            elif result == "skipped":
-                job.status = "SKIPPED"
-                job.skip_reason = "no_easy_apply_btn"
-                db.commit()
-                _inc_stat(db, "skipped", user_id)
+                for job in jobs:
+                    if not st["running"]:
+                        break
+                    while st["paused"]:
+                        await asyncio.sleep(2)
+                    if applied_today >= apply_limit:
+                        _log(f"🎯 Daily apply limit ({apply_limit}) reached.", user_id)
+                        break
 
-            await asyncio.sleep(random.uniform(delay_min, delay_max))
+                    st["current_job"] = f"{job.title} @ {job.company}"
+                    _schedule_broadcast({"type": "stats", "state": {k: v for k, v in st.items() if k != "log"}}, user_id)
+                    _log(f"🚀 Applying [{job.match_score}]: {job.title} @ {job.company} [{platform}]", user_id)
 
-        await agent.stop()
+                    try:
+                        result = await agent.apply_to_job({
+                            "job_id": job.job_id, "title": job.title, "company": job.company,
+                            "url": job.url, "description": job.description,
+                        })
+                    except Exception as e:
+                        logger.exception(e)
+                        _log(f"💥 {platform} apply error: {type(e).__name__}: {e}", user_id)
+                        result = "failed"
+
+                    if result == "applied":
+                        job.status = "APPLIED"
+                        job.applied_at = datetime.utcnow()
+                        db.commit()
+                        _inc_stat(db, "applied", user_id)
+                        applied_today += 1
+                        _log(f"✅ Applied: {job.title} [{applied_today}/{apply_limit}]", user_id)
+                    elif result == "failed":
+                        job.status = "FAILED"
+                        db.commit()
+                        _inc_stat(db, "failed", user_id)
+                        _log(f"❌ Failed: {job.title}", user_id)
+                    elif result == "skipped":
+                        job.status = "SKIPPED"
+                        job.skip_reason = "no_easy_apply_btn"
+                        db.commit()
+                        _inc_stat(db, "skipped", user_id)
+
+                    await asyncio.sleep(random.uniform(delay_min, delay_max))
+            finally:
+                await agent.stop()
+
         st["phase"] = "idle"
         st["current_job"] = ""
         _log(f"🏁 Apply phase done. Applied: {applied_today}", user_id)

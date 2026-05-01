@@ -45,9 +45,14 @@ def score_job(
         if bc.lower() in co_l:
             return 0.0, [], f"company_blacklisted:{bc}"
 
-    # Keyword hit ratio
+    # Score model (was: matched / total_skills, which collapses scores when
+    # the candidate has many skills). New model:
+    #   base 40 for clearing the title whitelist
+    #   +5 per matched skill, capped at +35
+    #   +bonuses for strong title + agile/PRD combo
+    #   -20 if 3+ years experience required
     matched = [kw for kw in candidate_skills if kw in full]
-    kw_score = (len(matched) / max(len(candidate_skills), 1)) * 100
+    kw_score = 40 + min(len(matched) * 5, 35)
 
     # Bonus: strong title match (+15)
     strong_titles = ["product manager", "product owner", "associate product manager", "apm"]

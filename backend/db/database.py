@@ -1,5 +1,6 @@
 import os
 import logging
+import sqlalchemy as sa
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 from .models import Base
@@ -53,8 +54,40 @@ def set_wal_mode(dbapi_conn, _):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+# V1 columns added at runtime via ALTER TABLE — keep this list in sync with models.py.
+# Each entry: (table_name, column_name, full DDL fragment after "ADD COLUMN").
+_V1_COLUMNS = [
+    ("profile", "persona", "persona VARCHAR(32) NOT NULL DEFAULT 'early_career'"),
+    ("profile", "preferred_cities", "preferred_cities TEXT NOT NULL DEFAULT '[]'"),
+    ("profile", "graduation_year", "graduation_year INTEGER"),
+    ("profile", "auto_run_enabled", "auto_run_enabled BOOLEAN NOT NULL DEFAULT 0"),
+    ("profile", "auto_run_time", "auto_run_time VARCHAR(8) NOT NULL DEFAULT '09:00'"),
+    ("jobs", "apply_channel", "apply_channel VARCHAR(16) NOT NULL DEFAULT 'external'"),
+    ("jobs", "external_apply_url", "external_apply_url TEXT"),
+]
+
+
+def _ensure_columns(eng):
+    """Idempotent ALTER TABLE for V1 columns. Safe on every startup."""
+    try:
+        inspector = sa.inspect(eng)
+        existing_tables = set(inspector.get_table_names())
+        with eng.begin() as conn:
+            for table, col, ddl in _V1_COLUMNS:
+                if table not in existing_tables:
+                    continue
+                cols = {c["name"] for c in inspector.get_columns(table)}
+                if col in cols:
+                    continue
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+                logger.info(f"Migrated: added {col} to {table}")
+    except Exception as e:
+        logger.warning(f"V1 column migration failed: {e}")
+
+
 def init_db():
     Base.metadata.create_all(bind=engine)
+    _ensure_columns(engine)
 
 
 def get_db():

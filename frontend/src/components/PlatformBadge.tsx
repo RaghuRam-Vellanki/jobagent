@@ -3,8 +3,7 @@ import React from 'react'
 const PLATFORM_CONFIG: Record<string, { label: string; color: string }> = {
   linkedin: { label: 'LinkedIn', color: '#0a66c2' },
   naukri: { label: 'Naukri', color: '#ff7555' },
-  internshala: { label: 'Internshala', color: '#00c6ae' },
-  unstop: { label: 'Unstop', color: '#6c2dc7' },
+  ats: { label: 'Top Companies', color: '#7c3aed' },
 }
 
 export function PlatformBadge({ platform }: { platform: string }) {

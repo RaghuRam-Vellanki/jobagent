@@ -54,6 +54,29 @@ def list_jobs(
     return {"total": total, "jobs": [_job_to_dict(j) for j in jobs]}
 
 
+# Bulk approve must be declared BEFORE the /{job_id}/approve route, otherwise
+# FastAPI matches "approve-all" as a job_id and returns 405.
+@router.post("/approve-all")
+def approve_all(
+    min_score: float = Query(0, description="Only approve QUEUED jobs with match_score >= this"),
+    platform: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    q = db.query(Job).filter(
+        Job.user_id == current_user.id,
+        Job.status == "QUEUED",
+        Job.match_score >= min_score,
+    )
+    if platform:
+        q = q.filter(Job.platform == platform.lower())
+    matched = q.all()
+    for j in matched:
+        j.status = "APPROVED"
+    db.commit()
+    return {"ok": True, "approved": len(matched), "min_score": min_score}
+
+
 @router.post("/{job_id}/approve")
 def approve_job(job_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     j = db.query(Job).filter_by(user_id=current_user.id, job_id=job_id).first()

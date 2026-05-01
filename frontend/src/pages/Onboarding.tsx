@@ -146,7 +146,7 @@ export default function Onboarding() {
 
               <button
                 onClick={handleContinue}
-                className="w-full mt-6 bg-accent text-white rounded-lg py-3 text-sm font-medium hover:bg-blue-600 transition-colors"
+                className="w-full mt-6 bg-accent text-white rounded-lg py-3 text-sm font-medium hover:bg-[#4F46E5] transition-colors"
               >
                 Continue to Settings →
               </button>

@@ -16,6 +16,9 @@ logger = logging.getLogger("agent.base")
 
 class BaseAgent(ABC):
     platform: str = "base"
+    # Some sites (Naukri) detect headless Chromium and serve a blank page.
+    # Subclasses can override this to force a visible browser window.
+    requires_visible_browser: bool = False
 
     def __init__(self, profile: dict, credentials: dict):
         self.profile = profile

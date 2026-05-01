@@ -38,6 +38,9 @@ export const approveJob = (jobId: string) =>
 export const rejectJob = (jobId: string) =>
   api.post(`/jobs/${jobId}/reject`).then(r => r.data)
 
+export const approveAll = (minScore: number, platform?: string) =>
+  api.post('/jobs/approve-all', null, { params: { min_score: minScore, ...(platform ? { platform } : {}) } }).then(r => r.data)
+
 export const updateJob = (jobId: string, payload: Record<string, unknown>) =>
   api.patch(`/jobs/${jobId}`, payload).then(r => r.data)
 

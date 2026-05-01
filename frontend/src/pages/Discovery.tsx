@@ -10,7 +10,14 @@ import { useAgentStore } from '../store/agentStore'
 import { LiveLog } from '../components/LiveLog'
 import { ExternalLink } from 'lucide-react'
 
-const PLATFORMS = ['all', 'linkedin', 'naukri', 'internshala', 'unstop']
+const PLATFORMS = ['all', 'linkedin', 'naukri', 'ats']
+
+const PLATFORM_LABELS: Record<string, string> = {
+  all: 'All Platforms',
+  linkedin: 'LinkedIn',
+  naukri: 'Naukri',
+  ats: 'Top Companies',
+}
 
 export default function Discovery() {
   const [platformFilter, setPlatformFilter] = useState('all')
@@ -49,7 +56,7 @@ export default function Discovery() {
                 : 'bg-white text-muted border-border hover:border-text'
             }`}
           >
-            {p === 'all' ? 'All Platforms' : p.charAt(0).toUpperCase() + p.slice(1)}
+            {PLATFORM_LABELS[p] ?? (p.charAt(0).toUpperCase() + p.slice(1))}
             {p !== 'all' && (
               <span className="ml-1.5 text-xs opacity-70">
                 {jobs.filter((j: Job) => j.platform === p).length}

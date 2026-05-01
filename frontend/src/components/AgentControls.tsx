@@ -4,12 +4,16 @@ import { useAgentStore } from '../store/agentStore'
 import { startDiscover, startApply, stopAgent, pauseAgent } from '../lib/api'
 import { useQueryClient } from '@tanstack/react-query'
 
-const PLATFORMS = ['linkedin', 'naukri', 'internshala', 'unstop']
+const PLATFORMS: Array<{ id: string; label: string }> = [
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'naukri', label: 'Naukri' },
+  { id: 'ats', label: 'Top Companies' },
+]
 
 export function AgentControls() {
   const { running, phase, paused } = useAgentStore()
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<string[]>(['linkedin', 'naukri'])
+  const [selected, setSelected] = useState<string[]>(['linkedin', 'naukri', 'ats'])
   const [loading, setLoading] = useState(false)
 
   const toggle = (p: string) =>
@@ -40,16 +44,16 @@ export function AgentControls() {
       <div className="flex gap-2">
         {PLATFORMS.map(p => (
           <button
-            key={p}
-            onClick={() => toggle(p)}
+            key={p.id}
+            onClick={() => toggle(p.id)}
             disabled={running}
             className={`px-3 py-1.5 rounded-sm text-xs font-medium border transition-colors ${
-              selected.includes(p)
+              selected.includes(p.id)
                 ? 'bg-accent text-white border-accent'
                 : 'bg-white text-muted border-border hover:border-accent'
             } disabled:opacity-40`}
           >
-            {p.charAt(0).toUpperCase() + p.slice(1)}
+            {p.label}
           </button>
         ))}
       </div>
@@ -62,7 +66,7 @@ export function AgentControls() {
           <button
             onClick={handleDiscover}
             disabled={loading || selected.length === 0}
-            className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded font-medium text-sm hover:bg-blue-600 disabled:opacity-40 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded font-medium text-sm hover:bg-[#4F46E5] disabled:opacity-40 transition-colors"
           >
             <RefreshCw size={14} />
             Discover Jobs

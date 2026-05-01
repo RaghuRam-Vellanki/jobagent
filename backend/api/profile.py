@@ -152,7 +152,9 @@ def set_credentials(platform: str, payload: dict, db: Session = Depends(get_db),
         db.add(c)
     if "email" in payload:
         c.email = payload["email"]
-    if "password" in payload:
+    # Only overwrite password when a non-empty value is sent. Empty string is
+    # treated as "user didn't re-enter password" — preserve what's stored.
+    if "password" in payload and payload["password"]:
         c.password = payload["password"]
     db.commit()
     return {"ok": True, "platform": platform}

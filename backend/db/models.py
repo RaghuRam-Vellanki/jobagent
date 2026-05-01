@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Date, Text, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, Float, DateTime, Date, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
@@ -38,6 +38,11 @@ class Job(Base):
 
     response_status = Column(String, default="no_response")
     follow_up_date = Column(Date, nullable=True)
+
+    # V1: apply channel — one of "in_board", "easy_apply", "external"
+    apply_channel = Column(String(16), default="external", nullable=False)
+    # V1: off-board URL when apply_channel == "external" and known at discovery time
+    external_apply_url = Column(Text, nullable=True, default=None)
 
     discovered_at = Column(DateTime, default=datetime.utcnow)
     applied_at = Column(DateTime, nullable=True)
@@ -86,6 +91,18 @@ class Profile(Base):
     daily_apply_limit = Column(Integer, default=25)
     delay_min = Column(Integer, default=4)
     delay_max = Column(Integer, default=10)
+
+    # V1: persona — one of "fresher", "early_career"
+    persona = Column(String(32), default="early_career", nullable=False)
+    # V1: JSON-encoded array of preferred city strings
+    preferred_cities = Column(Text, default="[]", nullable=False)
+    # V1: graduation year (only meaningful for fresher persona)
+    graduation_year = Column(Integer, nullable=True, default=None)
+    # V1: auto-run scheduler toggle
+    auto_run_enabled = Column(Boolean, default=False, nullable=False)
+    # V1: HH:MM (IST) string for daily auto-run time
+    auto_run_time = Column(String(8), default="09:00", nullable=False)
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
