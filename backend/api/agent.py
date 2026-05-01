@@ -155,6 +155,14 @@ def _get_profile_dict(db: Session, user_id: int) -> dict:
         skills = json.loads(p.skills) if p.skills else DEFAULT_SKILLS
     except Exception:
         skills = DEFAULT_SKILLS
+    preferred_cities: list[str] = []
+    try:
+        preferred_cities = json.loads(p.preferred_cities) if p.preferred_cities else []
+        if not isinstance(preferred_cities, list):
+            preferred_cities = []
+    except Exception:
+        preferred_cities = []
+
     return {
         "full_name": p.full_name,
         "email": p.email,
@@ -175,6 +183,9 @@ def _get_profile_dict(db: Session, user_id: int) -> dict:
         "delay_min": p.delay_min or 4,
         "delay_max": p.delay_max or 10,
         "skills": skills,
+        # V1 fields used by scorer
+        "persona": p.persona or "early_career",
+        "preferred_cities": preferred_cities,
     }
 
 
@@ -202,7 +213,6 @@ async def _run_discovery(platforms: list[str], user_id: int):
         location = profile.get("location_filter") or "India"
         threshold = profile.get("match_threshold") or 60
         queue_limit = profile.get("daily_queue_limit") or 50
-        skills = profile.get("skills") or DEFAULT_SKILLS
         filters = {"date_posted": profile.get("date_posted", "r86400")}
 
         queued_today = 0
@@ -275,7 +285,8 @@ async def _run_discovery(platforms: list[str], user_id: int):
                         job.get("title", ""),
                         job.get("description", ""),
                         job.get("company", ""),
-                        candidate_skills=skills,
+                        location=job.get("location", ""),
+                        profile=profile,
                     )
 
                     if skip_reason:
