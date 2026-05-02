@@ -261,26 +261,29 @@ class NaukriAgent(BaseAgent):
 
         try:
             await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # Wait up to 25s — Naukri's Next.js SPA hydrates slowly, especially
+            # for listings with company-site redirect (no #apply-button at all).
             try:
                 await self.page.wait_for_selector(
-                    "#apply-button, #login-apply-button, #reg-apply-button",
-                    timeout=15000,
+                    "#apply-button, #login-apply-button, #reg-apply-button, "
+                    "div[class*='apply']:has-text('Apply'), "
+                    "a:has-text('Apply'), button:has-text('Apply')",
+                    timeout=25000,
                 )
             except Exception:
+                # Last-resort diagnostic before giving up — log what's actually there
+                await self._diagnose_naukri_page(title)
                 logger.warning(f"[Naukri] No apply button rendered for: {title}")
                 return "failed"
             await self.human_delay(0.8, 1.5)
 
-            # E4-S9 fallback: if the page reveals an "Apply on company site"
-            # button (Naukri sometimes hides this until the listing renders),
-            # treat that as external regardless of what discovery tagged.
-            company_apply = self.page.locator(
-                "a:has-text('Apply on company'), button:has-text('Apply on company'), "
-                "a:has-text('Apply on Company'), a[href*='company']:has-text('Apply')"
-            )
-            if await company_apply.count() > 0:
-                logger.info(f"[Naukri] Detected company-site button — switching to external path: {title}")
-                return await self._apply_external_via_button(job, company_apply.first)
+            # E4-S9 fallback: detect company-site / external-redirect buttons
+            # via regex over all visible buttons + links. Broader than the
+            # prior text-only check ("Apply on company" only).
+            ext_button = await self._find_external_apply_button()
+            if ext_button is not None:
+                logger.info(f"[Naukri] Detected external apply button — switching: {title}")
+                return await self._apply_external_via_button(job, ext_button)
 
             # If only the login-prompt buttons are visible, we have no session.
             real_apply = await self.page.locator("button#apply-button, a#apply-button").count()
@@ -370,14 +373,12 @@ class NaukriAgent(BaseAgent):
                 return "skipped"
             await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
             await self.human_delay(1.5, 3)
-            company_apply = self.page.locator(
-                "a:has-text('Apply on company'), button:has-text('Apply on company'), "
-                "a:has-text('Apply on Company')"
-            ).first
-            if not await company_apply.count():
-                logger.warning(f"[Naukri-external] no 'Apply on company' button: {title}")
+            ext = await self._find_external_apply_button()
+            if ext is None:
+                await self._diagnose_naukri_page(title)
+                logger.warning(f"[Naukri-external] no external-apply button found: {title}")
                 return "failed"
-            return await self._apply_external_via_button(job, company_apply)
+            return await self._apply_external_via_button(job, ext)
 
         # Universal filler against the loaded company page
         result = await UniversalFormFiller(target_page, self.profile).run()
@@ -516,37 +517,175 @@ class NaukriAgent(BaseAgent):
         if self.profile.get("auto_submit_enabled"):
             try:
                 clicked = await self._click_naukri_submit()
-                if clicked:
-                    logger.warning("[Naukri] AUTO-SUBMITTED chatbot apply")
+                if not clicked:
+                    logger.warning("[Naukri] auto_submit_enabled=True but submit button not clicked — see _click_naukri_submit log above")
             except Exception as e:
                 logger.debug(f"[Naukri] auto-submit error: {e}")
+        else:
+            logger.info("[Naukri] auto_submit_enabled=False — leaving form for user to submit manually")
 
     async def _click_naukri_submit(self) -> bool:
-        """Find and click the chatbot's final Submit/Save/Apply button."""
-        for sel in [
-            "button:has-text('Submit')",
-            "button:has-text('Save')",
-            "button:has-text('Apply')",
-            "div[class*='apply']:has-text('Submit')",
-            "div[role='button']:has-text('Submit')",
-        ]:
-            try:
-                el = self.page.locator(sel).first
-                if await el.count() and await el.is_visible(timeout=500):
-                    txt = (await el.inner_text() or "").lower()
-                    # Don't click "Apply" if it's the listing-level button
-                    # (those have id="apply-button" handled earlier)
-                    btn_id = (await el.get_attribute("id")) or ""
-                    if btn_id == "apply-button":
+        """Find and click the chatbot's final Submit/Save/Apply button.
+
+        Researched 2026-05-02: Naukri's chatbot may use Submit / Save / Send /
+        Confirm / Done / Finish / Complete / Proceed / "Submit application".
+        We scan all visible buttons and pick the last-rendered one whose label
+        matches the regex — last-rendered is a strong heuristic for the final
+        action in a sequential chatbot.
+        """
+        import re as _re
+        FINAL_PATTERN = _re.compile(
+            r"^(submit\s*application|submit|send|confirm|done|finish|complete|proceed)\s*$",
+            _re.IGNORECASE,
+        )
+        candidates: list[tuple[str, object]] = []
+        try:
+            for sel in ("button", "input[type=submit]", "div[role=button]", "a"):
+                els = await self.page.locator(sel).all()
+                for el in els:
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        btn_id = (await el.get_attribute("id")) or ""
+                        if btn_id == "apply-button":
+                            continue  # listing-level, handled earlier
+                        text = (await el.inner_text() or "").strip()
+                        if not text:
+                            text = (await el.get_attribute("aria-label") or "").strip()
+                        if not text or len(text) > 60:
+                            continue
+                        cls = (await el.get_attribute("class")) or ""
+                        # Direct text match
+                        if FINAL_PATTERN.match(text):
+                            candidates.append((text, el))
+                            continue
+                        # Class-based fallback (Naukri styled buttons)
+                        if _re.search(r"submit|send|chatbot.*action", cls, _re.IGNORECASE):
+                            candidates.append((text, el))
+                    except Exception:
                         continue
-                    if any(w in txt for w in ("submit", "save", "send", "complete")):
-                        await el.scroll_into_view_if_needed()
-                        await el.click()
-                        await self.human_delay(1, 2)
-                        return True
-            except Exception:
-                continue
-        return False
+
+            if not candidates:
+                # Diagnostic: log all visible button labels so we know the
+                # real label on the next failing site without needing a probe.
+                samples: list[str] = []
+                for sel in ("button", "div[role=button]"):
+                    try:
+                        els = await self.page.locator(sel).all()
+                        for el in els[:25]:
+                            try:
+                                if await el.is_visible():
+                                    t = (await el.inner_text() or "").strip()
+                                    if t and len(t) < 60:
+                                        samples.append(t)
+                                    if len(samples) >= 12:
+                                        break
+                            except Exception:
+                                continue
+                    except Exception:
+                        continue
+                logger.warning(f"[Naukri-submit] no submit-shaped button. Sample buttons: {samples}")
+                return False
+
+            # Pick the LAST candidate — chatbots show the final action button
+            # at the end of the conversation flow.
+            text, el = candidates[-1]
+            await el.scroll_into_view_if_needed()
+            await el.click()
+            logger.warning(f"[Naukri-submit] AUTO-SUBMITTED via {text!r}")
+            await self.human_delay(1, 2)
+            return True
+        except Exception as e:
+            logger.debug(f"[Naukri-submit] error: {e}")
+            return False
+
+    async def _find_external_apply_button(self):
+        """Find a button/link that redirects to an external company site.
+        Researched: Naukri uses varied labels — "Apply on company website",
+        "Apply on company site", "Apply on careers page", "Visit company
+        site". Some listings use icon-only buttons with descriptive
+        href/aria-label. Returns the Locator or None.
+        """
+        import re as _re
+        TXT_PATTERN = _re.compile(
+            r"apply.{0,25}(company|site|website|their|careers|portal|recruiter)",
+            _re.IGNORECASE,
+        )
+        try:
+            # Pass 1 — text-based regex match on buttons + links
+            for sel in ("a", "button", "div[role=button]"):
+                els = await self.page.locator(sel).all()
+                for el in els:
+                    try:
+                        if not await el.is_visible():
+                            continue
+                        text = (await el.inner_text() or "").strip()
+                        aria = (await el.get_attribute("aria-label") or "").strip()
+                        full = f"{text} {aria}"
+                        if TXT_PATTERN.search(full):
+                            return el
+                    except Exception:
+                        continue
+            # Pass 2 — links with careers/jobs in href that are NOT naukri.com
+            anchors = await self.page.locator("a[href]").all()
+            for a in anchors:
+                try:
+                    if not await a.is_visible():
+                        continue
+                    href = (await a.get_attribute("href") or "").lower()
+                    if not href:
+                        continue
+                    if "naukri.com" in href or "naukrigulf.com" in href:
+                        continue
+                    if any(seg in href for seg in ("/careers", "/jobs", "/apply", "/career")):
+                        text = (await a.inner_text() or "").lower()
+                        if "apply" in text or "career" in text:
+                            return a
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"_find_external_apply_button error: {e}")
+        return None
+
+    async def _diagnose_naukri_page(self, title: str):
+        """Log what's actually on the Naukri page when the apply button
+        couldn't be found — gives us the real DOM without needing a probe."""
+        try:
+            counts: dict = {}
+            for sel, name in [
+                ("#apply-button", "id=apply-button"),
+                ("a[href]", "links"),
+                ("button", "buttons"),
+                ("div[role=button]", "div-role-button"),
+                ("iframe", "iframes"),
+            ]:
+                try:
+                    counts[name] = await self.page.locator(sel).count()
+                except Exception:
+                    counts[name] = -1
+            url = self.page.url
+            samples: list[str] = []
+            for sel in ("button", "a"):
+                try:
+                    els = await self.page.locator(sel).all()
+                    for el in els[:30]:
+                        try:
+                            if await el.is_visible():
+                                t = (await el.inner_text() or "").strip()
+                                if t and 2 <= len(t) <= 60:
+                                    samples.append(t)
+                                if len(samples) >= 15:
+                                    break
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+            logger.warning(
+                f"[Naukri-diagnostic] {title!r} url={url} counts={counts} "
+                f"samples={samples}"
+            )
+        except Exception as e:
+            logger.debug(f"_diagnose_naukri_page error: {e}")
 
     async def _fill_visible_inputs(self, profile_map: dict) -> int:
         """Fill every visible, empty <input>/<textarea> we can map by its
