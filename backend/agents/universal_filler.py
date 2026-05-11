@@ -84,6 +84,7 @@ class FillResult:
     pages_filled: int = 0
     fields_filled: int = 0
     fields_skipped: list[str] = field(default_factory=list)
+    fields_llm_answered: int = 0
     reason: str = ""
     reached_review: bool = False
 
@@ -98,10 +99,13 @@ class UniversalFormFiller:
         *,
         max_passes: int = MAX_PASSES,
         auto_submit: bool | None = None,
+        user_id: int | None = None,
     ):
         self.page = page
+        self._raw_profile = profile  # kept for LLM (richer than normalized)
         self.profile = self._normalize_profile(profile)
         self.max_passes = max_passes
+        self.user_id = user_id
         # If caller didn't specify, fall back to profile.auto_submit_enabled.
         # Default False (safer — user clicks the final button).
         self.auto_submit = (
@@ -286,7 +290,15 @@ class UniversalFormFiller:
 
             attr = self._match_synonym(label_text)
             if not attr:
-                self.result.fields_skipped.append(label_text[:80])
+                # Unknown field — try cache, then LLM. Counts as filled if
+                # successful; otherwise falls through to skip-list so the
+                # user can see what we missed.
+                ok = await self._fill_unknown_field(handle, label_text)
+                if ok:
+                    filled += 1
+                    self.result.fields_llm_answered += 1
+                else:
+                    self.result.fields_skipped.append(label_text[:80])
                 continue
 
             value = self.profile.get(attr, "")
@@ -298,6 +310,122 @@ class UniversalFormFiller:
                 filled += 1
 
         return filled
+
+    async def _fill_unknown_field(self, handle: ElementHandle, label: str) -> bool:
+        """Cache-first, LLM-fallback fill for fields that the synonym table
+        doesn't cover (custom screening questions). Returns True if the
+        field ended up populated."""
+        # Cheap guards first.
+        if not label or len(label) > 500:
+            return False
+
+        try:
+            from ..llm import get_client, is_enabled
+            from ..llm.claude_client import question_hash
+        except Exception as e:
+            logger.debug(f"llm import failed: {e}")
+            return False
+
+        if not is_enabled():
+            return False
+
+        try:
+            tag = (await handle.evaluate("el => el.tagName")).lower()
+            input_type = (await handle.get_attribute("type") or "").lower()
+        except Exception:
+            return False
+
+        # Skip resume/file inputs — uploads are handled elsewhere.
+        if input_type == "file":
+            return False
+
+        # Collect select/radio options so the LLM picks a real label.
+        options: list[str] | None = None
+        if tag == "select":
+            try:
+                opts = await handle.query_selector_all("option")
+                options = []
+                for o in opts:
+                    t = (await o.inner_text() or "").strip()
+                    if t and t.lower() not in ("", "select", "select...", "choose", "-"):
+                        options.append(t)
+                if not options:
+                    return False
+            except Exception:
+                return False
+
+        # Cache lookup.
+        qhash = question_hash(label)
+        answer = await self._lookup_cached_answer(qhash)
+
+        if answer is None:
+            # Cache miss — call Claude.
+            client = get_client()
+            answer = await client.answer_screening_question(
+                question=label,
+                profile=self._raw_profile,
+                options=options,
+                user_id=self.user_id,
+            )
+            if not answer:
+                return False
+            await self._store_cached_answer(qhash, label, answer)
+
+        # Now actually fill the field.
+        try:
+            if tag == "select":
+                return await self._select_option(handle, answer)
+            if input_type in ("radio", "checkbox"):
+                # For yes/no questions answered by LLM, only check if answer is affirmative.
+                if answer.strip().lower() in ("yes", "y", "true", "1", "agree", "accept"):
+                    await handle.check()
+                    return True
+                return False
+            # text / textarea / email / tel / number / url
+            await handle.scroll_into_view_if_needed()
+            await handle.fill("")
+            await handle.fill(answer)
+            return True
+        except Exception as e:
+            logger.debug(f"fill_unknown ({label[:40]!r}) failed: {e}")
+            return False
+
+    async def _lookup_cached_answer(self, qhash: str) -> str | None:
+        try:
+            from ..db.database import SessionLocal
+            from ..db.models import ScreeningAnswer
+            with SessionLocal() as db:
+                row = (
+                    db.query(ScreeningAnswer)
+                    .filter(
+                        ScreeningAnswer.user_id == self.user_id,
+                        ScreeningAnswer.question_hash == qhash,
+                    )
+                    .first()
+                )
+                if not row:
+                    return None
+                row.use_count = (row.use_count or 0) + 1
+                db.commit()
+                return row.answer
+        except Exception as e:
+            logger.debug(f"screening cache lookup failed: {e}")
+            return None
+
+    async def _store_cached_answer(self, qhash: str, question: str, answer: str) -> None:
+        try:
+            from ..db.database import SessionLocal
+            from ..db.models import ScreeningAnswer
+            with SessionLocal() as db:
+                db.add(ScreeningAnswer(
+                    user_id=self.user_id,
+                    question_hash=qhash,
+                    question_text=question[:1000],
+                    answer=answer[:2000],
+                ))
+                db.commit()
+        except Exception as e:
+            logger.debug(f"screening cache write failed: {e}")
 
     async def _field_label(self, handle: ElementHandle) -> str:
         """Best-effort label resolution: aria-label → aria-labelledby →
@@ -793,4 +921,6 @@ class UniversalFormFiller:
 
 async def fill_form(page: Page, profile: dict, max_passes: int = MAX_PASSES) -> FillResult:
     """Run the universal filler against `page` using `profile`. Returns FillResult."""
-    return await UniversalFormFiller(page, profile, max_passes=max_passes).run()
+    return await UniversalFormFiller(
+        page, profile, max_passes=max_passes, user_id=profile.get("user_id"),
+    ).run()

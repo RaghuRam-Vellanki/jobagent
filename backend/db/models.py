@@ -44,6 +44,15 @@ class Job(Base):
     # V1: off-board URL when apply_channel == "external" and known at discovery time
     external_apply_url = Column(Text, nullable=True, default=None)
 
+    # V1.2: freshness — when the JD was posted on the source platform (UTC).
+    # Used to sort the queue newest-first (applying within 2h of posting
+    # historically yields ~5x reply rate).
+    posted_at_source = Column(DateTime, nullable=True, index=True)
+    # V1.2: dedup key = sha256(user_id|company_lower|title_normalized)[:16].
+    # We use this to drop the same role re-listed on multiple sources or
+    # within a 30-day window.
+    dedup_key = Column(String(32), nullable=True, index=True)
+
     discovered_at = Column(DateTime, default=datetime.utcnow)
     applied_at = Column(DateTime, nullable=True)
 
@@ -123,3 +132,36 @@ class Credential(Base):
     email = Column(String, default="")
     password = Column(String, default="")
     session_cookies = Column(Text, nullable=True)
+
+
+class LLMCall(Base):
+    """One row per Claude API call. Used for per-user cost cap and audit."""
+    __tablename__ = "llm_calls"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    model = Column(String(64), nullable=False)
+    purpose = Column(String(32), nullable=False)  # screening | cover_letter | scoring
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cache_read_tokens = Column(Integer, default=0)
+    cache_write_tokens = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class ScreeningAnswer(Base):
+    """Cache of LLM-generated answers to recurring screening questions.
+    Keyed by (user_id, question_hash) so identical questions across
+    applications cost the LLM only once."""
+    __tablename__ = "screening_answers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    question_hash = Column(String(64), index=True, nullable=False)
+    question_text = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    profile_version = Column(String(16), default="v1", nullable=False)
+    use_count = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

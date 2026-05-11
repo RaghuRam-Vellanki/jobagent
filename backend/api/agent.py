@@ -3,12 +3,14 @@ Agent API — start/stop/pause agents, stream live log via WebSocket.
 Multi-tenant: each user has isolated state. Max 3 concurrent browsers (semaphore).
 """
 import asyncio
+import hashlib
 import json
 import logging
 import random
+import re
 import sys
 import threading
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
@@ -113,14 +115,56 @@ def _inc_stat(db: Session, field: str, user_id: int, n: int = 1):
     _schedule_broadcast({"type": "stats", "state": {k: v for k, v in st.items() if k != "log"}}, user_id)
 
 
+def _compute_dedup_key(user_id: int, company: str, title: str) -> str:
+    """Stable per-user role identity. Two listings collide iff company + the
+    semantic role match — e.g., "Sr Product Manager" and "Senior Product Manager"
+    at the same company dedupe to the same key."""
+    c = (company or "").strip().lower()
+    t = (title or "").strip().lower()
+    # Collapse seniority/level noise so the same role across re-postings collides.
+    t = re.sub(r"\b(sr|senior|jr|junior|associate|lead|principal|staff)\b", "", t)
+    t = re.sub(r"[^a-z0-9]+", " ", t).strip()
+    raw = f"{user_id}|{c}|{t}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def _save_job(db: Session, info: dict, status: str, user_id: int,
-              score: float = 0, matched: list | None = None, skip_reason: str | None = None):
+              score: float = 0, matched: list | None = None, skip_reason: str | None = None) -> bool:
+    """Save a job row. Returns True if inserted, False if dropped as duplicate."""
     try:
         # V1: derive apply_channel — scrapers may set it explicitly; otherwise
         # fall back from the legacy `easy_apply` boolean. Default is "external".
         apply_channel = info.get("apply_channel")
         if not apply_channel:
             apply_channel = "easy_apply" if info.get("easy_apply") else "external"
+
+        # V1.2: dedup — drop if we've seen the same (company, normalized title)
+        # for this user in the last 30 days, regardless of platform.
+        dedup_key = _compute_dedup_key(user_id, info.get("company", ""), info.get("title", ""))
+        cutoff = datetime.utcnow() - timedelta(days=30)
+        existing = (
+            db.query(Job.id)
+            .filter(
+                Job.user_id == user_id,
+                Job.dedup_key == dedup_key,
+                Job.discovered_at >= cutoff,
+            )
+            .first()
+        )
+        if existing:
+            logger.debug(
+                f"[DB] dedup hit ({info.get('company')} / {info.get('title')}) — skipping"
+            )
+            return False
+
+        # V1.2: freshness — accept a parsed datetime or a string the scraper
+        # already converted. None = unknown (still saved, just unsorted).
+        posted_at = info.get("posted_at_source")
+        if isinstance(posted_at, str):
+            try:
+                posted_at = datetime.fromisoformat(posted_at)
+            except Exception:
+                posted_at = None
 
         j = Job(
             user_id=user_id,
@@ -137,13 +181,17 @@ def _save_job(db: Session, info: dict, status: str, user_id: int,
             skip_reason=skip_reason,
             apply_channel=apply_channel,
             external_apply_url=info.get("external_apply_url"),
+            posted_at_source=posted_at,
+            dedup_key=dedup_key,
             discovered_at=datetime.utcnow(),
         )
         db.add(j)
         db.commit()
+        return True
     except Exception as e:
         logger.error(f"[DB] save_job: {e}")
         db.rollback()
+        return False
 
 
 def _get_profile_dict(db: Session, user_id: int) -> dict:
@@ -164,6 +212,7 @@ def _get_profile_dict(db: Session, user_id: int) -> dict:
         preferred_cities = []
 
     return {
+        "user_id": user_id,
         "full_name": p.full_name,
         "email": p.email,
         "phone": p.phone,

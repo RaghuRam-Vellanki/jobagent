@@ -269,7 +269,7 @@ class ATSAggregatorAgent(BaseAgent):
             # V1: prefer the shared UniversalFormFiller — falls back to the
             # legacy generic filler if it didn't fill anything (defensive).
             from .universal_filler import UniversalFormFiller
-            uff = UniversalFormFiller(self.page, self.profile)
+            uff = UniversalFormFiller(self.page, self.profile, user_id=self.profile.get("user_id"))
             uff_result = await uff.run()
             logger.info(
                 f"[ATS] UniversalFormFiller — pages={uff_result.pages_filled} "

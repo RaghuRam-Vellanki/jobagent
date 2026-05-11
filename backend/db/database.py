@@ -67,6 +67,8 @@ _V1_COLUMNS = [
     ("profile", "auto_submit_enabled", "auto_submit_enabled BOOLEAN NOT NULL DEFAULT 0"),
     ("jobs", "apply_channel", "apply_channel VARCHAR(16) NOT NULL DEFAULT 'external'"),
     ("jobs", "external_apply_url", "external_apply_url TEXT"),
+    ("jobs", "posted_at_source", "posted_at_source DATETIME"),
+    ("jobs", "dedup_key", "dedup_key VARCHAR(32)"),
 ]
 
 

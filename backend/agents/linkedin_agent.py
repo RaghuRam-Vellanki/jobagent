@@ -339,11 +339,12 @@ class LinkedInAgent(BaseAgent):
             await self.human_delay(2, 3.5)
 
         # Run the universal filler on whatever loaded.
-        uff = UniversalFormFiller(target_page, self.profile)
+        uff = UniversalFormFiller(target_page, self.profile, user_id=self.profile.get("user_id"))
         result = await uff.run()
         logger.info(
             f"[LinkedIn-external] {title} — pages={result.pages_filled} "
-            f"filled={result.fields_filled} reached_review={result.reached_review} "
+            f"filled={result.fields_filled} llm_answered={result.fields_llm_answered} "
+            f"skipped={len(result.fields_skipped)} reached_review={result.reached_review} "
             f"reason={result.reason!r}"
         )
 

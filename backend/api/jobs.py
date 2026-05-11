@@ -97,8 +97,14 @@ def list_jobs(
     if platform:
         q = q.filter(Job.platform == platform.lower())
     total = q.count()
-    jobs = q.order_by(Job.match_score.desc(), Job.discovered_at.desc()) \
-             .offset(offset).limit(limit).all()
+    # V1.2: freshness first (posted_at_source DESC NULLS LAST), then score, then
+    # discovery time. Applying within 2h of posting has historically yielded
+    # ~5x reply rate, so freshness beats score within the same band.
+    jobs = q.order_by(
+        Job.posted_at_source.desc().nullslast(),
+        Job.match_score.desc(),
+        Job.discovered_at.desc(),
+    ).offset(offset).limit(limit).all()
     return {"total": total, "jobs": [_job_to_dict(j) for j in jobs]}
 
 

@@ -381,7 +381,7 @@ class NaukriAgent(BaseAgent):
             return await self._apply_external_via_button(job, ext)
 
         # Universal filler against the loaded company page
-        result = await UniversalFormFiller(target_page, self.profile).run()
+        result = await UniversalFormFiller(target_page, self.profile, user_id=self.profile.get("user_id")).run()
         logger.info(
             f"[Naukri-external] {title} — pages={result.pages_filled} "
             f"filled={result.fields_filled} reached_review={result.reached_review} "
@@ -423,7 +423,7 @@ class NaukriAgent(BaseAgent):
                 pass
         await self.human_delay(2, 3.5)
 
-        result = await UniversalFormFiller(target_page, self.profile).run()
+        result = await UniversalFormFiller(target_page, self.profile, user_id=self.profile.get("user_id")).run()
         logger.info(
             f"[Naukri-external-via-button] {title} — pages={result.pages_filled} "
             f"filled={result.fields_filled} reached_review={result.reached_review} "
