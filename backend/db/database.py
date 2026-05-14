@@ -65,6 +65,10 @@ _V1_COLUMNS = [
     ("profile", "email_notifications_enabled", "email_notifications_enabled BOOLEAN NOT NULL DEFAULT 0"),
     ("profile", "notification_email", "notification_email VARCHAR NOT NULL DEFAULT ''"),
     ("profile", "auto_submit_enabled", "auto_submit_enabled BOOLEAN NOT NULL DEFAULT 0"),
+    # V1.3: Daily Brief
+    ("profile", "daily_brief_enabled", "daily_brief_enabled BOOLEAN NOT NULL DEFAULT 0"),
+    ("profile", "brief_time", "brief_time VARCHAR(8) NOT NULL DEFAULT '09:00'"),
+    ("profile", "brief_top_n", "brief_top_n INTEGER NOT NULL DEFAULT 30"),
     ("jobs", "apply_channel", "apply_channel VARCHAR(16) NOT NULL DEFAULT 'external'"),
     ("jobs", "external_apply_url", "external_apply_url TEXT"),
     ("jobs", "posted_at_source", "posted_at_source DATETIME"),

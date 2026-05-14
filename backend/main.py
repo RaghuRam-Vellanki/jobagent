@@ -18,6 +18,7 @@ from api.agent import router as agent_router
 from api.profile import router as profile_router
 from api.ats import router as ats_router
 from api.stats import router as stats_router
+from api.brief import router as brief_router
 from config import FRONTEND_ORIGIN
 from scheduler import scheduler
 
@@ -54,6 +55,7 @@ app.include_router(agent_router)
 app.include_router(profile_router)
 app.include_router(ats_router)
 app.include_router(stats_router)
+app.include_router(brief_router)
 
 
 @app.get("/api/health")

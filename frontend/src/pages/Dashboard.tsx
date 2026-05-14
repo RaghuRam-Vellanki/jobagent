@@ -1,12 +1,13 @@
 import React from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getTotals, getStats } from '../lib/api'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { getTotals, getStats, runBrief, getBriefHistory, downloadBriefUrl } from '../lib/api'
 import { useAgentStore } from '../store/agentStore'
 import { AgentControls } from '../components/AgentControls'
 import { LiveLog } from '../components/LiveLog'
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend
 } from 'recharts'
+import { Mail, Download } from 'lucide-react'
 
 const STAT_CARDS = [
   { key: 'queued', label: 'In Queue', color: '#34c759' },
@@ -26,8 +27,27 @@ const PLATFORM_COLORS: Record<string, string> = {
 
 export default function Dashboard() {
   const { today_discovered, today_queued, today_applied, log, current_job } = useAgentStore()
+  const qc = useQueryClient()
   const { data: totals } = useQuery({ queryKey: ['totals'], queryFn: getTotals, refetchInterval: 10_000 })
   const { data: chartData } = useQuery({ queryKey: ['stats'], queryFn: () => getStats(7), refetchInterval: 30_000 })
+  const { data: briefs } = useQuery({
+    queryKey: ['briefs'],
+    queryFn: () => getBriefHistory(10),
+    refetchInterval: 30_000,
+  })
+  const [briefBusy, setBriefBusy] = React.useState(false)
+
+  async function handleRunBrief() {
+    setBriefBusy(true)
+    try {
+      await runBrief(null)
+      setTimeout(() => qc.invalidateQueries({ queryKey: ['briefs'] }), 2000)
+    } catch (e: any) {
+      alert('Failed to start brief: ' + (e?.message || e))
+    } finally {
+      setBriefBusy(false)
+    }
+  }
 
   const platformData = totals
     ? Object.entries(totals.by_platform ?? {}).map(([k, v]) => ({ name: k, value: v as number }))
@@ -53,9 +73,55 @@ export default function Dashboard() {
 
       {/* Agent controls */}
       <div className="bg-white border border-border rounded-lg p-4">
-        <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Agent Controls</div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs font-semibold text-muted uppercase tracking-wider">Agent Controls</div>
+          <button
+            onClick={handleRunBrief}
+            disabled={briefBusy}
+            className="flex items-center gap-2 px-3 py-1.5 bg-accent text-white rounded text-xs font-medium hover:bg-[#4F46E5] disabled:opacity-40 transition-colors"
+            title="Discover top jobs across all sources and email you the Excel digest"
+          >
+            <Mail size={13} />
+            {briefBusy ? 'Queued...' : 'Run Brief Now'}
+          </button>
+        </div>
         <AgentControls />
       </div>
+
+      {/* Recent briefs */}
+      {briefs && briefs.length > 0 && (
+        <div className="bg-white border border-border rounded-lg p-4">
+          <div className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">Recent Briefs</div>
+          <div className="space-y-2">
+            {briefs.map((b: any) => (
+              <div key={b.id} className="flex items-center justify-between text-sm border-b border-border last:border-b-0 pb-2 last:pb-0">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-muted w-32">
+                    {b.started_at ? new Date(b.started_at).toLocaleString() : '—'}
+                  </span>
+                  <span><b className="text-text">{b.jobs_count}</b> jobs</span>
+                  <span className="text-xs text-muted">top {Math.round(b.top_score)}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded ${b.email_sent ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                    {b.email_sent ? 'emailed' : (b.error_msg ? 'error' : 'pending')}
+                  </span>
+                  {b.error_msg && (
+                    <span className="text-xs text-red-600 truncate max-w-xs" title={b.error_msg}>{b.error_msg}</span>
+                  )}
+                </div>
+                {b.has_xlsx && (
+                  <a
+                    href={downloadBriefUrl(b.id)}
+                    className="flex items-center gap-1 text-xs text-accent hover:underline"
+                  >
+                    <Download size={12} />
+                    Excel
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Stats cards */}
       <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">

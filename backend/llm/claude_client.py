@@ -145,6 +145,67 @@ class ClaudeClient:
         _record_call(resp, SONNET, user_id=user_id, purpose="cover_letter")
         return body or None
 
+    async def enrich_company(
+        self,
+        company: str,
+        user_id: int | None = None,
+    ) -> dict | None:
+        """V1.3: Returns {funding_status, size_band, valuation, confidence} or
+        None when disabled / capped / parse-failed. Uses Haiku."""
+        if not self.enabled:
+            return None
+        if user_id is not None and not _under_daily_cap(user_id):
+            return None
+
+        from . import prompts
+
+        try:
+            resp = await self._client.messages.create(
+                model=HAIKU,
+                max_tokens=200,
+                system=[
+                    {
+                        "type": "text",
+                        "text": prompts.ENRICHMENT_SYSTEM,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompts.enrichment_user_prompt(company),
+                    }
+                ],
+            )
+        except Exception as e:
+            logger.warning(f"Claude enrichment call failed for '{company}': {e}")
+            return None
+
+        raw = _extract_text(resp).strip()
+        _record_call(resp, HAIKU, user_id=user_id, purpose="company_enrichment")
+
+        # Strip markdown fences if model added them despite instructions.
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:].lstrip()
+        try:
+            data = json.loads(raw)
+        except Exception:
+            logger.debug(f"enrichment JSON parse failed for '{company}': {raw[:120]!r}")
+            return {
+                "funding_status": "Unknown",
+                "size_band": "Unknown",
+                "valuation": "Unknown",
+                "confidence": "low",
+            }
+        return {
+            "funding_status": str(data.get("funding_status") or "Unknown")[:64],
+            "size_band": str(data.get("size_band") or "Unknown")[:32],
+            "valuation": str(data.get("valuation") or "Unknown")[:64],
+            "confidence": str(data.get("confidence") or "low")[:16],
+        }
+
 
 # ---------- helpers ----------
 

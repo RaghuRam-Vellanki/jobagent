@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getProfile, updateProfile, getCredentials, setCredentials } from '../lib/api'
+import { getProfile, updateProfile, getCredentials, setCredentials, runBrief } from '../lib/api'
 import { Save, Eye, EyeOff } from 'lucide-react'
 
 const PLATFORMS = ['linkedin', 'naukri', 'internshala', 'unstop']
@@ -348,6 +348,75 @@ export default function Settings() {
                   right answers for your platform mix (LinkedIn / Naukri / Greenhouse / Ashby).
                 </div>
               )}
+            </div>
+
+            {/* V1.3 — Daily Brief email digest */}
+            <div className="border-t border-border pt-5">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-sm font-semibold text-text">Daily Brief email</div>
+                  <div className="text-xs text-muted mt-0.5">
+                    A curated Excel digest of top-matching jobs across all sources
+                    (LinkedIn, Naukri, ATS aggregators, HN, Wellfound, Google Jobs),
+                    enriched with funding / size / valuation, emailed at the time you pick.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(form.daily_brief_enabled)}
+                  onClick={() => setField('daily_brief_enabled', !form.daily_brief_enabled)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                    form.daily_brief_enabled ? 'bg-accent' : 'bg-gray-300'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition-transform ${
+                      form.daily_brief_enabled ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {Boolean(form.daily_brief_enabled) && (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-muted mb-1.5">Brief time (IST, 24h)</label>
+                    <input
+                      type="time"
+                      value={String(form.brief_time || '09:00')}
+                      onChange={e => setField('brief_time', e.target.value)}
+                      className="w-full border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
+                    />
+                  </div>
+                  <Field
+                    label="Top N jobs"
+                    value={String(form.brief_top_n ?? 30)}
+                    onChange={v => setField('brief_top_n', Math.max(5, Math.min(100, Number(v) || 30)))}
+                    type="number"
+                  />
+                </div>
+              )}
+
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await runBrief(null)
+                      alert('Brief queued — check your inbox in a few minutes.')
+                    } catch (e: any) {
+                      alert('Failed to queue brief: ' + (e?.message || e))
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 border border-border rounded hover:bg-gray-50 transition-colors"
+                >
+                  Send a test brief now
+                </button>
+                <span className="text-xs text-muted ml-2">
+                  Uses your current notification email; falls back to account email if blank.
+                </span>
+              </div>
             </div>
           </div>
         )}

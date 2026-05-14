@@ -120,6 +120,11 @@ class Profile(Base):
     # itself instead of stopping at the review page. Default False (safer).
     auto_submit_enabled = Column(Boolean, default=False, nullable=False)
 
+    # V1.3: Daily Brief — opt-in scheduler for the curated Excel digest.
+    daily_brief_enabled = Column(Boolean, default=False, nullable=False)
+    brief_time = Column(String(8), default="09:00", nullable=False)
+    brief_top_n = Column(Integer, default=30, nullable=False)
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -165,3 +170,38 @@ class ScreeningAnswer(Base):
     use_count = Column(Integer, default=1)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CompanyEnrichment(Base):
+    """V1.3: Cache of LLM-derived company metadata for the Daily Brief.
+    30-day TTL enforced at read-time by checking updated_at."""
+    __tablename__ = "company_enrichments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    company_name_lc = Column(String(255), index=True, nullable=False)
+    funding_status = Column(String(64), default="Unknown")
+    size_band = Column(String(32), default="Unknown")
+    valuation = Column(String(64), default="Unknown")
+    confidence = Column(String(16), default="low")  # low | medium | high | none
+    source = Column(String(16), default="llm")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BriefRun(Base):
+    """V1.3: One row per Daily Brief execution. Used for history + dashboard."""
+    __tablename__ = "brief_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    platforms = Column(String(255), default="")  # comma-separated
+    jobs_count = Column(Integer, default=0)
+    top_score = Column(Float, default=0.0)
+    xlsx_path = Column(String(512), default="")
+    email_sent = Column(Boolean, default=False, nullable=False)
+    email_to = Column(String(255), default="")
+    error_msg = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, default=0)

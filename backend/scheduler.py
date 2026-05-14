@@ -41,6 +41,8 @@ class DailyScheduler:
         self._stop = threading.Event()
         # user_id → date object representing the last day we fired for that user
         self._last_run: dict[int, date] = {}
+        # V1.3: same idea but per Brief schedule
+        self._last_brief: dict[int, date] = {}
 
     # ── Public lifecycle ────────────────────────────────────────────────
 
@@ -78,6 +80,7 @@ class DailyScheduler:
 
         db = SessionLocal()
         try:
+            # ── Auto-apply schedule ──
             rows = db.query(Profile).filter(Profile.auto_run_enabled.is_(True)).all()
             for p in rows:
                 if not p.user_id:
@@ -90,6 +93,24 @@ class DailyScheduler:
 
                 self._fire(p.user_id)
                 self._last_run[p.user_id] = today
+
+            # ── Daily Brief schedule (V1.3) ──
+            try:
+                brief_rows = db.query(Profile).filter(
+                    Profile.daily_brief_enabled.is_(True)
+                ).all()
+            except Exception:
+                brief_rows = []  # column may not exist on fresh DB before migration
+            for p in brief_rows:
+                if not p.user_id:
+                    continue
+                target = (getattr(p, "brief_time", None) or "09:00").strip()[:5]
+                if target != hhmm:
+                    continue
+                if self._last_brief.get(p.user_id) == today:
+                    continue
+                self._fire_brief(p.user_id)
+                self._last_brief[p.user_id] = today
         finally:
             db.close()
 
@@ -109,6 +130,15 @@ class DailyScheduler:
             _log(f"⚠️ Auto-run dispatch failed: {err}", user_id)
             return
         logger.info(f"[scheduler] u{user_id}: dispatched full agent run")
+
+    def _fire_brief(self, user_id: int):
+        """V1.3: Trigger the Daily Brief in its own thread + event loop."""
+        from api.brief import _start_brief_thread
+        try:
+            _start_brief_thread(user_id, platforms=None)
+            logger.info(f"[scheduler] u{user_id}: dispatched daily brief")
+        except Exception as e:
+            logger.warning(f"[scheduler] u{user_id}: brief dispatch failed: {e}")
 
 
 # Module-level singleton.

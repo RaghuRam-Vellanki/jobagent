@@ -91,3 +91,10 @@ export const getStats = (days = 7) =>
   api.get('/stats', { params: { days } }).then(r => r.data)
 export const getTotals = () =>
   api.get('/stats/totals').then(r => r.data)
+
+// Daily Brief (V1.3)
+export const runBrief = (platforms?: string[] | null) =>
+  api.post('/brief/run', { platforms: platforms ?? null }).then(r => r.data)
+export const getBriefHistory = (limit = 20) =>
+  api.get('/brief/history', { params: { limit } }).then(r => r.data)
+export const downloadBriefUrl = (runId: number) => `/api/brief/${runId}/download`

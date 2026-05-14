@@ -131,3 +131,126 @@ def send_apply_email(profile: dict, job: dict) -> bool:
     except Exception as e:
         logger.warning(f"[email] failed to send to {to_addr}: {e}")
         return False
+
+
+def send_brief_email(to: str, xlsx_path: str, summary: dict, top5: list[dict]) -> bool:
+    """V1.3: Send the Daily Brief email with the xlsx attached + top-5 table in body.
+
+    Returns True on successful send."""
+    global _SMTP_WARNING_LOGGED
+
+    to_addr = (to or "").strip()
+    if not to_addr:
+        logger.info("[email] brief: no recipient — skipping")
+        return False
+
+    cfg = _smtp_config()
+    if not cfg:
+        if not _SMTP_WARNING_LOGGED:
+            logger.warning("[email] SMTP not configured — brief email skipped")
+            _SMTP_WARNING_LOGGED = True
+        return False
+
+    total = summary.get("total", 0)
+    platforms = ", ".join(summary.get("platforms", [])) or "—"
+    top_score = summary.get("top_score", 0)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    subject = f"[JobAgent] Daily Brief — {total} jobs for {today}"
+
+    # Plain-text fallback
+    plain_lines = [f"Daily Brief — {today}", f"Total jobs: {total}",
+                   f"Sources: {platforms}", f"Top match score: {top_score}", ""]
+    for i, j in enumerate(top5, start=1):
+        plain_lines.append(
+            f"{i}. [{j.get('match_score', 0)}] {j.get('title', '')} @ "
+            f"{j.get('company', '')} ({j.get('location', '')}) — {j.get('url', '')}"
+        )
+    plain_lines += ["", "Full list attached as Excel.", "— JobAgent"]
+    plain = "\n".join(plain_lines)
+
+    # HTML body
+    rows_html = ""
+    for j in top5:
+        url = j.get("url", "")
+        rows_html += (
+            f"<tr>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid #E8E8EC;'>{j.get('match_score', 0)}</td>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid #E8E8EC;'><strong>{j.get('title', '')}</strong></td>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid #E8E8EC;'>{j.get('company', '')}</td>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid #E8E8EC;'>{j.get('location', '')}</td>"
+            f"<td style='padding:6px 10px; border-bottom:1px solid #E8E8EC;'>"
+            f"<a href='{url}' style='color:#0071e3; text-decoration:none;'>Open</a></td>"
+            f"</tr>"
+        )
+
+    html = f"""\
+<!doctype html>
+<html><body style="font-family:'DM Sans', system-ui, sans-serif; color:#0A0A0A; max-width:680px; margin:0 auto; padding:24px;">
+  <div style="font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#6B6B6B;">
+    JobAgent — daily brief
+  </div>
+  <h2 style="font-size:22px; margin:8px 0 4px; letter-spacing:-0.02em;">
+    {total} matching roles for {today}
+  </h2>
+  <div style="font-size:13px; color:#6B6B6B; margin-bottom:20px;">
+    Sources: {platforms} · Top score: {top_score}
+  </div>
+  <table style="width:100%; font-size:13px; border-collapse:collapse; border:1px solid #E8E8EC;">
+    <thead>
+      <tr style="background:#F4F4F6;">
+        <th style="text-align:left; padding:8px 10px;">Score</th>
+        <th style="text-align:left; padding:8px 10px;">Title</th>
+        <th style="text-align:left; padding:8px 10px;">Company</th>
+        <th style="text-align:left; padding:8px 10px;">Location</th>
+        <th style="text-align:left; padding:8px 10px;">Link</th>
+      </tr>
+    </thead>
+    <tbody>{rows_html}</tbody>
+  </table>
+  <p style="margin-top:20px; font-size:13px; color:#6B6B6B;">
+    Full list of {total} jobs attached as Excel — funding, company size, valuation, and apply links included.
+  </p>
+  <hr style="border:none; border-top:1px solid #E8E8EC; margin:24px 0;"/>
+  <div style="font-size:11px; color:#9C9C9C;">
+    Sent by JobAgent. Manage your brief schedule in Settings.
+  </div>
+</body></html>"""
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["from"]
+    msg["To"] = to_addr
+    msg.set_content(plain)
+    msg.add_alternative(html, subtype="html")
+
+    # Attach the xlsx
+    if xlsx_path and os.path.exists(xlsx_path):
+        try:
+            with open(xlsx_path, "rb") as f:
+                data = f.read()
+            msg.add_attachment(
+                data,
+                maintype="application",
+                subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                filename=os.path.basename(xlsx_path),
+            )
+        except Exception as e:
+            logger.warning(f"[email] brief: attach failed: {e}")
+
+    try:
+        if cfg["use_ssl"]:
+            ctx = ssl.create_default_context()
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ctx, timeout=30) as server:
+                server.login(cfg["user"], cfg["password"])
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as server:
+                server.starttls(context=ssl.create_default_context())
+                server.login(cfg["user"], cfg["password"])
+                server.send_message(msg)
+        logger.info(f"[email] brief sent → {to_addr}: {subject}")
+        return True
+    except Exception as e:
+        logger.warning(f"[email] brief failed → {to_addr}: {e}")
+        return False

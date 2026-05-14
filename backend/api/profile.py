@@ -62,6 +62,10 @@ def _profile_to_dict(p: Profile) -> dict:
         "email_notifications_enabled": bool(p.email_notifications_enabled),
         "notification_email": p.notification_email or "",
         "auto_submit_enabled": bool(p.auto_submit_enabled),
+        # V1.3 Daily Brief
+        "daily_brief_enabled": bool(getattr(p, "daily_brief_enabled", False)),
+        "brief_time": getattr(p, "brief_time", None) or "09:00",
+        "brief_top_n": getattr(p, "brief_top_n", None) or 30,
     }
 
 
@@ -92,6 +96,8 @@ def update_profile(payload: dict, db: Session = Depends(get_db), current_user: U
         "email_notifications_enabled", "notification_email",
         # V1.1 auto-submit
         "auto_submit_enabled",
+        # V1.3 Daily Brief
+        "daily_brief_enabled", "brief_time", "brief_top_n",
     }
     for key, val in payload.items():
         if key in field_map:

@@ -47,3 +47,16 @@ def cover_letter_user_prompt(job_title: str, company: str, jd: str) -> str:
         f"Job description:\n{jd[:3000]}\n\n"
         f"Write the cover letter."
     )
+
+
+ENRICHMENT_SYSTEM = """You are a market-intelligence assistant. Given a company name, return JSON with:
+- funding_status: one of Bootstrapped|Seed|Series A|Series B|Series C|Series D+|Public|Acquired|Subsidiary|Unknown
+- size_band: one of 1-10|11-50|51-200|201-500|501-1000|1001-5000|5001+|Unknown
+- valuation: USD estimate as string (e.g. "$2.5B", "$50M", "Public — see ticker", or "Unknown")
+- confidence: low|medium|high
+
+Output ONLY a single JSON object, no prose, no markdown fences. Use 'Unknown' over guessing for obscure startups."""
+
+
+def enrichment_user_prompt(company: str) -> str:
+    return f"Company: {company.strip()}\nReturn the JSON now."
